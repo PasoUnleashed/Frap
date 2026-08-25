@@ -68,6 +68,103 @@ function WindowControls(): JSX.Element | null {
   )
 }
 
+/**
+ * The app mark, drawn rather than loaded so it stays sharp at any size and on
+ * any display. The geometry and colours mirror `scripts/make-icon.mjs`, which
+ * generates the icon the packaged app ships with.
+ */
+function BrandMark(): JSX.Element {
+  return (
+    <svg
+      className="brand-mark"
+      viewBox="0 0 100 100"
+      role="img"
+      aria-label="Frap"
+      focusable="false"
+    >
+      <defs>
+        <linearGradient id="frap-mark" x1="0" y1="0" x2="100" y2="100" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor="#335cd6" />
+          <stop offset="1" stopColor="#8b53f7" />
+        </linearGradient>
+      </defs>
+      <rect width="100" height="100" rx="22.5" fill="url(#frap-mark)" />
+      {/* The F: stem, top arm, middle arm. */}
+      <rect x="28.5" y="27" width="10" height="46" rx="4.5" fill="#fff" />
+      <rect x="28.5" y="26.5" width="43" height="10" rx="4.5" fill="#fff" />
+      <rect x="28.5" y="45.25" width="34" height="9.5" rx="4.3" fill="#fff" />
+    </svg>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/* Workspace switcher                                                  */
+/* ------------------------------------------------------------------ */
+
+/** How many recent workspaces the chip offers. */
+const RECENT_IN_SWITCHER = 5
+
+/**
+ * The chip in the title bar doubles as a workspace switcher: it names the
+ * collection you are in, and drops down the handful you were in before.
+ */
+function WorkspaceChip(): JSX.Element {
+  const { state, actions } = useStore()
+  const chipRef = useRef<HTMLButtonElement | null>(null)
+
+  const openMenu = async (): Promise<void> => {
+    const recent = state.recent.slice(0, RECENT_IN_SWITCHER)
+
+    // Two workspaces can easily share a name - every repo with an `api`
+    // folder. Only those get the parent folder appended to tell them apart;
+    // the full path would blow the menu out to the width of the screen.
+    const seen = new Map<string, number>()
+    for (const entry of recent) seen.set(entry.name, (seen.get(entry.name) ?? 0) + 1)
+
+    const items: MenuItem[] = recent.map((entry, index) => {
+      const parent = entry.root.split(/[\\/]/).filter(Boolean).at(-2)
+      const ambiguous = (seen.get(entry.name) ?? 0) > 1
+      return {
+        id: `recent:${index}`,
+        type: 'checkbox' as const,
+        checked: entry.root === state.root,
+        label: ambiguous && parent ? `${entry.name}  —  ${parent}` : entry.name
+      }
+    })
+
+    if (items.length) items.push({ type: 'separator' })
+    items.push({ id: 'open', label: 'Open Folder…', accelerator: 'CmdOrCtrl+O' })
+
+    // Hang the menu off the chip rather than the mouse pointer.
+    const box = chipRef.current?.getBoundingClientRect()
+    const choice = await api.contextMenu(
+      items,
+      box ? { x: box.left, y: box.bottom } : undefined
+    )
+
+    if (choice === null) return
+    if (choice === 'open') {
+      void actions.pickAndOpen()
+      return
+    }
+    const picked = recent[Number(choice.slice('recent:'.length))]
+    if (picked) void actions.open(picked.root)
+  }
+
+  return (
+    <button
+      ref={chipRef}
+      className="workspace-chip"
+      onClick={() => void openMenu()}
+      title={`${state.root}\nSwitch workspace`}
+    >
+      <span className="name">{state.config?.name}</span>
+      <span className="path">{state.root}</span>
+      <span className="caret">⌄</span>
+    </button>
+  )
+}
+
 /* ------------------------------------------------------------------ */
 /* Tabs                                                                */
 /* ------------------------------------------------------------------ */
@@ -132,14 +229,15 @@ function TabStrip(): JSX.Element {
   }
 
   /** Lists every open tab, so a hidden one is still one click away. */
-  const openOverflowMenu = async (): Promise<void> => {
+  const openOverflowMenu = async (event: MouseEvent): Promise<void> => {
     const items: MenuItem[] = state.tabs.map((tab, index) => ({
       id: String(index),
       type: 'checkbox',
       checked: tab.path === state.activeTab,
       label: `${tab.request.method} ${tab.request.name}${isDirty(tab) ? ' •' : ''}`
     }))
-    const choice = await api.contextMenu(items)
+    const box = (event.currentTarget as HTMLElement).getBoundingClientRect()
+    const choice = await api.contextMenu(items, { x: box.left, y: box.bottom })
     if (choice === null) return
     const tab = state.tabs[Number(choice)]
     if (tab) actions.selectTab(tab.path)
@@ -253,7 +351,7 @@ function TabStrip(): JSX.Element {
           <button
             className="tab-nav list"
             title={`${state.tabs.length} open tabs`}
-            onClick={() => void openOverflowMenu()}
+            onClick={(e) => void openOverflowMenu(e)}
           >
             ⌄
             {overflow.hidden > 0 && <span className="count">{overflow.hidden}</span>}
@@ -502,8 +600,8 @@ export function App(): JSX.Element {
     return (
       <div className="app">
         <div className={`titlebar${isMac ? ' mac' : ''}`}>
-          <div className="brand">
-            <span>Frap</span>
+          <div className="brand" title="Frap">
+            <BrandMark />
           </div>
           <span className="spacer drag-region" />
           <WindowControls />
@@ -525,20 +623,13 @@ export function App(): JSX.Element {
         >
           ☰
         </button>
-        <div className="brand">
-          <span>Frap</span>
+        <div className="brand" title="Frap">
+          <BrandMark />
         </div>
 
         {state.root ? (
           <>
-            <div
-              className="workspace-chip"
-              onClick={() => void actions.pickAndOpen()}
-              title={`${state.root}\nClick to open a different folder`}
-            >
-              <span>{state.config?.name}</span>
-              <span className="path">{state.root}</span>
-            </div>
+            <WorkspaceChip />
 
             <span className="spacer drag-region" />
 

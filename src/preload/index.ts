@@ -51,7 +51,10 @@ const api = {
     open: (root: string) => call<unknown>('workspace:open', root),
     refresh: () => call<unknown>('workspace:refresh'),
     saveConfig: (config: unknown) => call<unknown>('workspace:saveConfig', config),
-    recent: () => call<{ recent: string[]; last: string | null }>('workspace:recent'),
+    recent: () =>
+      call<{ recent: Array<{ root: string; name: string }>; last: string | null }>(
+        'workspace:recent'
+      ),
     forget: (root: string) => call<void>('workspace:forget', root),
     reveal: (target: string) => call<void>('workspace:reveal', target)
   },
@@ -85,7 +88,8 @@ const api = {
       call<{ sidebarWidth: number; responseHeight: number }>('layout:set', patch)
   },
   menu: {
-    context: (items: unknown[]) => call<string | null>('menu:context', items),
+    context: (items: unknown[], at?: { x: number; y: number }) =>
+      call<string | null>('menu:context', items, at),
     app: () => call<boolean>('menu:app')
   },
   window: {

@@ -114,6 +114,12 @@ export interface WorkspaceConfig {
   settings: Required<RequestSettings>
 }
 
+/** A workspace in the recent list, with the name its config gives it. */
+export interface RecentWorkspace {
+  root: string
+  name: string
+}
+
 export type NodeKind = 'folder' | 'request'
 
 export interface TreeNode {

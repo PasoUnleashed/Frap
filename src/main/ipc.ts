@@ -12,6 +12,7 @@ import {
   type ExecResult,
   type FrapRequest,
   type HistoryEntry,
+  type RecentWorkspace,
   type VariableScope,
   type TreeNode,
   type Workspace,
@@ -38,6 +39,7 @@ import {
   moveNode,
   normalizeRequest,
   openWorkspace,
+  readConfig,
   readRequest,
   renameNode,
   reorder,
@@ -274,10 +276,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
   handle('workspace:recent', async () => {
     const state = await loadState()
-    // Drop folders that have since been deleted or moved.
-    const alive: string[] = []
+    // Drop folders that have since been deleted or moved, and pick up the
+    // name each one gives itself so the switcher shows what the title bar
+    // would show, not just the folder name.
+    const alive: RecentWorkspace[] = []
     for (const root of state.recentWorkspaces) {
-      if (await fs.stat(root).then((s) => s.isDirectory()).catch(() => false)) alive.push(root)
+      if (!(await fs.stat(root).then((s) => s.isDirectory()).catch(() => false))) continue
+      const config = await readConfig(root).catch(() => null)
+      alive.push({ root, name: config?.name || path.basename(root) })
     }
     return { recent: alive, last: state.lastWorkspace }
   })
@@ -615,7 +621,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
    * Pops up a real OS context menu from a template the renderer supplies and
    * resolves with the id that was clicked (or null if it was dismissed).
    */
-  handle('menu:context', (items: ContextMenuItem[]) => {
+  handle('menu:context', (items: ContextMenuItem[], at?: { x: number; y: number }) => {
     const window = getWindow()
     if (!window) return null
     return new Promise<string | null>((resolve) => {
@@ -635,8 +641,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
             }
       )
       const menu = Menu.buildFromTemplate(template)
+      // A dropdown opened from a button passes the button's corner, so the
+      // menu hangs off the control rather than the mouse pointer.
+      const anchor = at ? { x: Math.round(at.x), y: Math.round(at.y) } : {}
       // `closed` fires after `click`, so the id is already set by then.
-      menu.popup({ window, callback: () => resolve(picked) })
+      menu.popup({ window, ...anchor, callback: () => resolve(picked) })
     })
   })
 

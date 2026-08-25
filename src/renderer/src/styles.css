@@ -246,10 +246,13 @@ input[type='checkbox'] {
 .brand {
   display: flex;
   align-items: center;
-  font-weight: 700;
-  letter-spacing: 0.4px;
+  flex: none;
   padding-right: 2px;
-  color: var(--text-dim);
+}
+.brand-mark {
+  width: 18px;
+  height: 18px;
+  display: block;
 }
 
 .window-controls {
@@ -282,8 +285,9 @@ input[type='checkbox'] {
   display: flex;
   align-items: center;
   gap: 6px;
-  max-width: 320px;
-  padding: 3px 9px;
+  max-width: 340px;
+  padding: 3px 8px;
+  text-align: left;
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -293,11 +297,30 @@ input[type='checkbox'] {
 .workspace-chip:hover {
   border-color: var(--border-strong);
 }
-.workspace-chip > span:first-child {
+.workspace-chip .name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 0 1 auto;
+}
+/* The name is the identity, the path only context. Flex shrink alone will not
+   do it - it is proportional, so a long path always drags the name down with
+   it - so the path is capped instead and the name keeps what it needs. */
+.workspace-chip .path {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 170px;
+}
+/* Signals that the chip drops down rather than opening a folder picker. */
+.workspace-chip .caret {
+  flex: none;
+  margin-left: 1px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-faint);
+}
+.workspace-chip:hover .caret {
+  color: var(--text-dim);
 }
 .workspace-chip .path {
   color: var(--text-faint);

@@ -22,6 +22,7 @@ import {
   type ExecResult,
   type FrapRequest,
   type HistoryEntry,
+  type RecentWorkspace,
   type TreeNode,
   type VariableScope,
   type WorkspaceConfig
@@ -70,7 +71,7 @@ export interface State {
   activeEnv: string | null
   tabs: TabState[]
   activeTab: string | null
-  recent: string[]
+  recent: RecentWorkspace[]
   loading: boolean
   showEnvs: boolean
   showHelp: boolean
@@ -123,7 +124,7 @@ const initialState: State = {
 
 type Action =
   | { type: 'loading'; value: boolean }
-  | { type: 'recent'; recent: string[] }
+  | { type: 'recent'; recent: RecentWorkspace[] }
   | {
       type: 'workspace'
       root: string
@@ -387,6 +388,20 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
 
   const open = useCallback(
     async (root: string) => {
+      if (root === ref.current.root) return
+
+      // Opening a workspace closes every tab, so unsaved edits would vanish
+      // without a word. At boot there are no tabs, so this never fires there.
+      const dirty = ref.current.tabs.filter(isDirty)
+      if (dirty.length) {
+        const names = dirty.map((t) => `  • ${t.request.name}`).join('\n')
+        const ok = window.confirm(
+          `${dirty.length} request${dirty.length === 1 ? ' has' : 's have'} unsaved changes:\n\n` +
+            `${names}\n\nSwitch workspace and discard them?`
+        )
+        if (!ok) return
+      }
+
       dispatch({ type: 'loading', value: true })
       const opened = await guard(() => api.openWorkspace(root))
       if (!opened) {
@@ -850,7 +865,7 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
       ])
       dispatch({ type: 'recent', recent })
       dispatch({ type: 'layout', layout })
-      if (last && recent.includes(last)) await open(last)
+      if (last && recent.some((entry) => entry.root === last)) await open(last)
       else dispatch({ type: 'loading', value: false })
     })()
     // Intentionally runs once on mount.

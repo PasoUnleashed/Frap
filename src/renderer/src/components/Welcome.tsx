@@ -23,12 +23,16 @@ export function Welcome(): JSX.Element {
 
         {state.recent.length > 0 && (
           <div className="recent">
-            {state.recent.map((root) => (
-              <div key={root} className="item" onClick={() => void actions.open(root)}>
-                <span>{root.split(/[\\/]/).filter(Boolean).pop()}</span>
+            {state.recent.map((entry) => (
+              <div
+                key={entry.root}
+                className="item"
+                onClick={() => void actions.open(entry.root)}
+              >
+                <span>{entry.name}</span>
                 <span className="spacer" />
-                <span className="p" title={root}>
-                  {root}
+                <span className="p" title={entry.root}>
+                  {entry.root}
                 </span>
               </div>
             ))}

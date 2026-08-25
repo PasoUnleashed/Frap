@@ -7,6 +7,7 @@ import type {
   ExecResult,
   FrapRequest,
   HistoryEntry,
+  RecentWorkspace,
   TreeNode,
   VariableScope,
   WorkspaceConfig
@@ -56,7 +57,8 @@ export const api = {
       config: WorkspaceConfig
       environments: EnvFileView[]
     }>,
-  recentWorkspaces: () => bridge.workspace.recent(),
+  recentWorkspaces: () =>
+    bridge.workspace.recent() as Promise<{ recent: RecentWorkspace[]; last: string | null }>,
   forgetWorkspace: (root: string) => bridge.workspace.forget(root),
   reveal: (target: string) => bridge.workspace.reveal(target),
 
@@ -84,7 +86,9 @@ export const api = {
   getLayout: () => bridge.layout.get(),
   setLayout: (patch: Partial<LayoutState>) => bridge.layout.set(patch),
 
-  contextMenu: (items: MenuItem[]) => bridge.menu.context(items),
+  /** `at` anchors the menu to a point in the window, for button dropdowns. */
+  contextMenu: (items: MenuItem[], at?: { x: number; y: number }) =>
+    bridge.menu.context(items, at),
   appMenu: () => bridge.menu.app(),
 
   window: bridge.window,

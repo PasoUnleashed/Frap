@@ -198,7 +198,10 @@ the literal values.
 
 Per machine, in your app-data folder (or `frap-data` beside the portable exe):
 
-- **Recent workspaces**, and the one to reopen on launch
+- **Recent workspaces**, and the one to reopen on launch. The chip in the
+  title bar names the collection you are in and drops down the last five, so
+  hopping between a couple of APIs is one click. Anything with unsaved edits
+  asks first, since switching closes every tab.
 - **Send history** per workspace — method, URL, status and timing for
   everything you have sent, grouped by day in the sidebar's History tab
   (`Ctrl+H`). Click an entry to jump back to the request it came from.
