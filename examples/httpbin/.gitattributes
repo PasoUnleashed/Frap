@@ -1,0 +1,7 @@
+# Recommended for any Frap workspace: keep collection files and environments
+# on LF everywhere, so a Windows checkout does not show every line as changed
+# to someone on macOS or Linux.
+*.frap.json text eol=lf
+frap.workspace.json text eol=lf
+.env text eol=lf
+.env.* text eol=lf

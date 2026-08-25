@@ -14,7 +14,7 @@ import type {
   Workspace,
   WorkspaceConfig
 } from '../shared/types.ts'
-import { entryViews, parseEnv, readEnvDoc, setEnvValue, unsetEnvValue, writeEnvDoc } from './dotenv.ts'
+import { entryViews, readEnvDoc, setEnvValue, unsetEnvValue, writeEnvDoc } from './dotenv.ts'
 import { execute } from './execute.ts'
 import {
   createFolder,
@@ -349,10 +349,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     if (!env) throw new Error(`Unknown environment: ${name}`)
     const absPath = envAbsPath(root, env.file)
     await fs.mkdir(path.dirname(absPath), { recursive: true })
-    // Written verbatim - the user is editing the file itself here.
+    // Written verbatim - the user is editing the file itself here, so we do
+    // not reformat, reorder or re-quote anything.
     await fs.writeFile(absPath, raw, 'utf8')
-    // Parse it back so obvious mistakes surface immediately.
-    parseEnv(raw)
     return listEnvironments()
   })
 
