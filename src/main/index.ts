@@ -111,12 +111,30 @@ function buildMenu(): void {
           },
           { type: 'separator' },
           { label: 'Save', accelerator: 'CmdOrCtrl+S', click: () => send('menu:save') },
-          { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => send('menu:closeTab') },
           { type: 'separator' },
           isMac ? { role: 'close' as const } : { role: 'quit' as const }
         ]
       },
       { role: 'editMenu' },
+      {
+        label: '&Tabs',
+        submenu: [
+          { label: 'Next Tab', accelerator: 'Control+Tab', click: () => send('menu:nextTab') },
+          {
+            label: 'Previous Tab',
+            accelerator: 'Control+Shift+Tab',
+            click: () => send('menu:prevTab')
+          },
+          { type: 'separator' },
+          { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => send('menu:closeTab') },
+          {
+            label: 'Close Other Tabs',
+            accelerator: 'CmdOrCtrl+Alt+W',
+            click: () => send('menu:closeOtherTabs')
+          },
+          { label: 'Close All Tabs', accelerator: 'CmdOrCtrl+Shift+W', click: () => send('menu:closeAllTabs') }
+        ]
+      },
       {
         label: '&Request',
         submenu: [

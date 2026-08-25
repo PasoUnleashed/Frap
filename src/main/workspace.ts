@@ -183,6 +183,20 @@ async function uniquePath(dir: string, base: string, ext: string): Promise<strin
   }
 }
 
+/** The folder equivalent of `uniquePath`. */
+async function uniqueDir(parentDir: string, base: string): Promise<string> {
+  let candidate = path.join(parentDir, base)
+  let n = 2
+  for (;;) {
+    try {
+      await fs.access(candidate)
+      candidate = path.join(parentDir, `${base} ${n++}`)
+    } catch {
+      return candidate
+    }
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* Reading the tree                                                    */
 /* ------------------------------------------------------------------ */
@@ -338,36 +352,53 @@ export async function writeRequest(absPath: string, req: FrapRequest): Promise<v
   await fs.writeFile(absPath, next, 'utf8')
 }
 
+/** One past the highest `order` already used in a folder. */
+async function nextOrder(root: string, parentDir: string): Promise<number> {
+  const siblings = await scanTree(root, parentDir)
+  return siblings.reduce((m, n) => Math.max(m, n.order), 0) + 1
+}
+
+/**
+ * Writes a request object into `parentDir` under a file name that is free,
+ * giving it a fresh id and a position at the end of the folder.
+ *
+ * Shared by everything that materialises a request that did not exist before:
+ * a cURL import, a paste, a copy.
+ */
+export async function writeNewRequest(
+  root: string,
+  parentDir: string,
+  request: FrapRequest
+): Promise<string> {
+  assertInside(root, parentDir)
+  await fs.mkdir(parentDir, { recursive: true })
+  const target = await uniquePath(parentDir, sanitizeName(request.name), REQUEST_EXT)
+  const req: FrapRequest = {
+    ...request,
+    id: randomUUID(),
+    // The file name is the source of truth, so the two must agree.
+    name: displayName(path.basename(target)),
+    order: await nextOrder(root, parentDir)
+  }
+  await fs.writeFile(target, serializeRequest(req), 'utf8')
+  return target
+}
+
 export async function createRequest(
   root: string,
   parentDir: string,
   name = 'New Request'
 ): Promise<string> {
-  assertInside(root, parentDir)
-  await fs.mkdir(parentDir, { recursive: true })
-  const target = await uniquePath(parentDir, sanitizeName(name), REQUEST_EXT)
-  const siblings = await scanTree(root, parentDir)
-  const maxOrder = siblings.reduce((m, n) => Math.max(m, n.order), 0)
-  const req = normalizeRequest(
-    { name: displayName(path.basename(target)), order: maxOrder + 1, method: 'GET', url: '' },
-    name
-  )
-  await fs.writeFile(target, serializeRequest(req), 'utf8')
-  return target
+  return writeNewRequest(root, parentDir, normalizeRequest({ name, method: 'GET', url: '' }, name))
 }
 
-export async function createFolder(root: string, parentDir: string, name = 'New Folder'): Promise<string> {
+export async function createFolder(
+  root: string,
+  parentDir: string,
+  name = 'New Folder'
+): Promise<string> {
   assertInside(root, parentDir)
-  let target = path.join(parentDir, sanitizeName(name))
-  let n = 2
-  for (;;) {
-    try {
-      await fs.access(target)
-      target = path.join(parentDir, `${sanitizeName(name)} ${n++}`)
-    } catch {
-      break
-    }
-  }
+  const target = await uniqueDir(parentDir, sanitizeName(name))
   await fs.mkdir(target, { recursive: true })
   return target
 }
@@ -397,6 +428,60 @@ export async function duplicateRequest(root: string, absPath: string): Promise<s
   req.name = displayName(path.basename(target))
   req.order = req.order + 1
   await fs.writeFile(target, serializeRequest(req), 'utf8')
+  return target
+}
+
+/**
+ * Copies a folder, giving every request inside it a fresh id.
+ *
+ * Written out rather than using `fs.cp` because the ids have to change on the
+ * way through: two files claiming the same id would make history and test
+ * results ambiguous. Anything that is not a request (a `_folder.frap.json`,
+ * a fixture a multipart body points at) is copied verbatim.
+ */
+async function copyTree(from: string, to: string): Promise<void> {
+  await fs.mkdir(to, { recursive: true })
+  for (const entry of await fs.readdir(from, { withFileTypes: true })) {
+    const src = path.join(from, entry.name)
+    const dst = path.join(to, entry.name)
+    if (entry.isDirectory()) {
+      if (IGNORED_DIRS.has(entry.name) || entry.name.startsWith('.')) continue
+      await copyTree(src, dst)
+    } else if (isRequestFile(entry.name) && entry.name !== FOLDER_META) {
+      const req = await readRequest(src).catch(() => null)
+      if (!req) {
+        // Unparseable, but still the user's file: keep it as-is.
+        await fs.copyFile(src, dst)
+        continue
+      }
+      req.id = randomUUID()
+      await fs.writeFile(dst, serializeRequest(req), 'utf8')
+    } else if (entry.isFile()) {
+      await fs.copyFile(src, dst)
+    }
+  }
+}
+
+/** Copies a request or a whole folder into `destDir`, resolving name clashes. */
+export async function copyNode(root: string, absPath: string, destDir: string): Promise<string> {
+  assertInside(root, absPath)
+  assertInside(root, destDir)
+  await fs.mkdir(destDir, { recursive: true })
+
+  const base = path.basename(absPath)
+
+  if (isRequestFile(base)) {
+    const request = await readRequest(absPath)
+    return writeNewRequest(root, destDir, request)
+  }
+
+  const from = path.resolve(absPath)
+  const into = path.resolve(destDir)
+  if (into === from || into.startsWith(from + path.sep)) {
+    throw new Error('Cannot copy a folder into itself')
+  }
+  const target = await uniqueDir(destDir, base)
+  await copyTree(absPath, target)
   return target
 }
 

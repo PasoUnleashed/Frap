@@ -8,6 +8,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { promises as fs } from 'node:fs'
 import {
+  copyNode,
   createFolder,
   createRequest,
   duplicateRequest,
@@ -20,6 +21,7 @@ import {
   sanitizeName,
   scanTree,
   serializeRequest,
+  writeNewRequest,
   writeRequest,
   assertInside
 } from '../src/main/workspace.ts'
@@ -166,6 +168,86 @@ test('reordering writes the position into each file', async () => {
 
   const tree = await scanTree(root, folder)
   assert.deepEqual(tree.map((n) => n.name), ['B', 'A'])
+})
+
+test('copying a request into a folder gives the copy a fresh id', async () => {
+  const folder = await createFolder(root, root, 'Copy Target')
+  const source = await createRequest(root, root, 'Copy Me')
+  const copied = await copyNode(root, source, folder)
+
+  assert.equal(path.dirname(copied), folder)
+  assert.equal(path.basename(copied), 'Copy Me.frap.json')
+  // The original stays where it was: this is a copy, not a move.
+  await fs.access(source)
+  assert.notEqual((await readRequest(copied)).id, (await readRequest(source)).id)
+})
+
+test('copying into the same folder does not overwrite the original', async () => {
+  const source = await createRequest(root, root, 'Same Folder')
+  const copied = await copyNode(root, source, root)
+  assert.equal(path.basename(copied), 'Same Folder 2.frap.json')
+  await fs.access(source)
+})
+
+test('copying a folder copies everything under it, with new ids', async () => {
+  const source = await createFolder(root, root, 'Tree Source')
+  const nested = await createFolder(root, source, 'Nested')
+  const a = await createRequest(root, source, 'A')
+  const b = await createRequest(root, nested, 'B')
+  const dest = await createFolder(root, root, 'Tree Dest')
+
+  const copied = await copyNode(root, source, dest)
+  assert.equal(path.basename(copied), 'Tree Source')
+
+  const copiedA = path.join(copied, 'A.frap.json')
+  const copiedB = path.join(copied, 'Nested', 'B.frap.json')
+  assert.notEqual((await readRequest(copiedA)).id, (await readRequest(a)).id)
+  assert.notEqual((await readRequest(copiedB)).id, (await readRequest(b)).id)
+  assert.equal((await readRequest(copiedB)).name, 'B')
+})
+
+test('a folder cannot be copied inside itself', async () => {
+  const folder = await createFolder(root, root, 'Recursive')
+  const inner = await createFolder(root, folder, 'Inner')
+  await assert.rejects(() => copyNode(root, folder, inner), /into itself/)
+  await assert.rejects(() => copyNode(root, folder, folder), /into itself/)
+})
+
+test('a pasted request lands at the end of its new folder', async () => {
+  const folder = await createFolder(root, root, 'Ordering')
+  await createRequest(root, folder, 'First')
+  await createRequest(root, folder, 'Second')
+  const pasted = await writeNewRequest(
+    root,
+    folder,
+    normalizeRequest({ name: 'Third', method: 'POST', url: 'https://example.com' }, 'Third')
+  )
+  assert.equal((await readRequest(pasted)).order, 3)
+  const tree = await scanTree(root, folder)
+  assert.deepEqual(tree.map((n) => n.name), ['First', 'Second', 'Third'])
+})
+
+test('a pasted request keeps its settings but not its identity', async () => {
+  const folder = await createFolder(root, root, 'Paste Target')
+  const pasted = await writeNewRequest(
+    root,
+    folder,
+    normalizeRequest(
+      {
+        id: 'an-id-from-somewhere-else',
+        name: 'Pasted',
+        method: 'patch',
+        url: '{{BASE_URL}}/things',
+        headers: [{ enabled: true, key: 'Accept', value: 'application/json' }]
+      },
+      'Pasted'
+    )
+  )
+  const request = await readRequest(pasted)
+  assert.notEqual(request.id, 'an-id-from-somewhere-else')
+  assert.equal(request.method, 'PATCH')
+  assert.equal(request.url, '{{BASE_URL}}/things')
+  assert.equal(request.headers[0].value, 'application/json')
 })
 
 test('paths outside the workspace are refused', () => {

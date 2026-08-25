@@ -24,6 +24,15 @@ export function pathKey(target: string): string {
 
 export class SelfWriteTracker {
   private readonly marks = new Map<string, number>()
+  /**
+   * Parent folders of the paths we wrote.
+   *
+   * Writing a file bumps its folder's mtime, and the recursive watcher reports
+   * that folder as a separate event. Those are matched by equality only: a
+   * prefix match here would also swallow a genuine external change to a
+   * sibling that happened to land in the same grace window.
+   */
+  private readonly parents = new Map<string, number>()
   private readonly graceMs: number
   private readonly now: () => number
 
@@ -39,7 +48,11 @@ export class SelfWriteTracker {
     const until = this.now() + this.graceMs
     if (this.marks.size > 512) this.prune()
     for (const target of targets) {
-      if (target) this.marks.set(pathKey(target), until)
+      if (!target) continue
+      const key = pathKey(target)
+      this.marks.set(key, until)
+      const parent = pathKey(path.dirname(target))
+      if (parent !== key) this.parents.set(parent, until)
     }
   }
 
@@ -47,6 +60,13 @@ export class SelfWriteTracker {
   has(absPath: string): boolean {
     const key = pathKey(absPath)
     const now = this.now()
+
+    const parentUntil = this.parents.get(key)
+    if (parentUntil !== undefined) {
+      if (parentUntil >= now) return true
+      this.parents.delete(key)
+    }
+
     for (const [marked, until] of this.marks) {
       if (until < now) {
         this.marks.delete(marked)
@@ -60,6 +80,7 @@ export class SelfWriteTracker {
   private prune(): void {
     const now = this.now()
     for (const [key, until] of this.marks) if (until < now) this.marks.delete(key)
+    for (const [key, until] of this.parents) if (until < now) this.parents.delete(key)
   }
 
   /** Test seam. */
@@ -69,5 +90,6 @@ export class SelfWriteTracker {
 
   clear(): void {
     this.marks.clear()
+    this.parents.clear()
   }
 }

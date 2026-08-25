@@ -241,13 +241,50 @@ local and staging is not something your teammates see in a diff.
 
 ### Shortcuts
 
-`Ctrl+Enter` send · `Ctrl+.` cancel · `Ctrl+S` save · `Ctrl+N` new request ·
-`Ctrl+Shift+N` new folder · `Ctrl+I` import from cURL ·
-`Ctrl+Shift+C` copy as cURL · `Ctrl+W` close tab · `Ctrl+L` focus URL ·
-`Ctrl+E` environments · `Ctrl+H` history · `Ctrl+R` reload from disk ·
-`Ctrl+O` open workspace · `F1` scripting reference · `F12` dev tools
+**Anywhere** — `Ctrl+Enter` send · `Ctrl+.` cancel · `Ctrl+S` save ·
+`Ctrl+N` new request · `Ctrl+Shift+N` new folder · `Ctrl+I` import from cURL ·
+`Ctrl+Shift+C` copy as cURL · `Ctrl+L` focus URL · `Ctrl+E` environments ·
+`Ctrl+H` history · `Ctrl+R` reload from disk · `Ctrl+O` open workspace ·
+`F1` scripting reference · `F12` dev tools
+
+**Tabs** — `Ctrl+Tab` / `Ctrl+Shift+Tab` next and previous (they wrap) ·
+`Ctrl+W` close · `Ctrl+Alt+W` close others · `Ctrl+Shift+W` close all
+
+**Collection tree** (when it has focus) — `↑` `↓` move · `→` expand or step in ·
+`←` collapse or jump to the parent · `Home` / `End` first and last ·
+`Enter` open or toggle · `F2` rename · `Delete` move to trash ·
+`Ctrl+D` duplicate · `Ctrl+C` copy · `Ctrl+X` cut · `Ctrl+V` paste ·
+`Esc` clear the clipboard
+
+These are scoped to the tree, so `Ctrl+C` in the URL bar or a script editor
+still means "copy text".
 
 The menu bar lives behind the ☰ button in the title bar.
+
+### Copy, cut and paste in the tree
+
+`Ctrl+C` a request, click a folder, `Ctrl+V` — the copy lands inside with a new
+id, so the two never collide. `Ctrl+X` moves instead of copying, and the row
+dims until you paste it. Both work on whole folders too; a folder copy brings
+everything under it, re-identified as it goes.
+
+The buffer is shown in the sidebar footer, since it is state you cannot
+otherwise see. Click it to clear it, or press `Esc`.
+
+`Ctrl+C` also puts the request's JSON on the system clipboard, and `Ctrl+V`
+falls back to whatever is there when Frap's own buffer is empty:
+
+- a request's JSON → creates it in the target folder, so requests paste between
+  Frap windows, out of a file, or out of a message from a colleague
+- a `curl` command → imports it, the same as `Ctrl+I` but without the dialog
+
+### Many open tabs
+
+The tab strip shrinks tabs to a readable minimum and then scrolls. When it
+overflows you get `‹` `›` to nudge it, and a `⌄` button listing every open tab
+with the current one ticked. The mouse wheel scrolls the strip sideways, and
+selecting a request anywhere — the tree, history, `Ctrl+Tab` — scrolls its tab
+into view.
 
 ## Downloads
 

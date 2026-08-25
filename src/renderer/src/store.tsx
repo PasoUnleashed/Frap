@@ -16,20 +16,33 @@ import {
   type JSX,
   type ReactNode
 } from 'react'
-import type {
-  EnvFileView,
-  ExecResult,
-  FrapRequest,
-  HistoryEntry,
-  TreeNode,
-  VariableScope,
-  WorkspaceConfig
+import {
+  REQUEST_EXT,
+  type EnvFileView,
+  type ExecResult,
+  type FrapRequest,
+  type HistoryEntry,
+  type TreeNode,
+  type VariableScope,
+  type WorkspaceConfig
 } from '@shared/types'
 import { api, type LayoutState } from './api'
+
+/** Display label for a path: the file name without Frap's extension. */
+const labelOf = (target: string): string => {
+  const base = target.split(/[\\/]/).pop() ?? target
+  return base.endsWith(REQUEST_EXT) ? base.slice(0, -REQUEST_EXT.length) : base
+}
 
 export type RequestTab = 'params' | 'headers' | 'body' | 'auth' | 'pre' | 'post' | 'docs'
 export type ResponseTab = 'body' | 'headers' | 'tests' | 'console' | 'sent'
 export type SidebarView = 'tree' | 'history'
+
+/** What Ctrl+C / Ctrl+X put aside for the next Ctrl+V. */
+export interface NodeClip {
+  path: string
+  mode: 'copy' | 'cut'
+}
 
 export interface TabState {
   path: string
@@ -71,6 +84,12 @@ export interface State {
   layout: LayoutState
   /** Folders the user collapsed, keyed by absolute path. */
   collapsed: Record<string, boolean>
+  /** The tree row the keyboard acts on. Independent of which tab is open. */
+  selected: string | null
+  /** Tree row being renamed in place; null when none is. */
+  renaming: string | null
+  /** Cut/copy buffer for tree nodes, cleared once a cut has been pasted. */
+  clip: NodeClip | null
   toasts: Toast[]
   /** Set when the watcher sees changes we have not pulled in yet. */
   diskChanged: boolean
@@ -95,6 +114,9 @@ const initialState: State = {
   variables: {},
   layout: { sidebarWidth: 280, responseHeight: 45 },
   collapsed: {},
+  selected: null,
+  renaming: null,
+  clip: null,
   toasts: [],
   diskChanged: false
 }
@@ -126,6 +148,9 @@ type Action =
   | { type: 'variables'; variables: VariableScope }
   | { type: 'layout'; layout: LayoutState }
   | { type: 'collapsed'; collapsed: Record<string, boolean> }
+  | { type: 'selected'; path: string | null }
+  | { type: 'renaming'; path: string | null }
+  | { type: 'clip'; clip: NodeClip | null }
   | { type: 'toast'; toast: Toast }
   | { type: 'dismissToast'; id: number }
   | { type: 'diskChanged'; value: boolean }
@@ -218,6 +243,12 @@ function reducer(state: State, action: Action): State {
       return { ...state, layout: action.layout }
     case 'collapsed':
       return { ...state, collapsed: action.collapsed }
+    case 'selected':
+      return { ...state, selected: action.path }
+    case 'renaming':
+      return { ...state, renaming: action.path }
+    case 'clip':
+      return { ...state, clip: action.clip }
     case 'diskChanged':
       return { ...state, diskChanged: action.value }
     default:
@@ -279,7 +310,43 @@ export interface Actions {
 
   setLayout(patch: Partial<LayoutState>): void
   toggleFolder(path: string): void
+  expandFolder(path: string): void
+
+  /* -- collection tree keyboard ------------------------------------- */
+
+  select(path: string | null): void
+  beginRename(path: string | null): void
+  /** Ctrl+C: remembers the node, and puts its JSON on the system clipboard. */
+  copyNode(path: string): Promise<void>
+  /** Ctrl+X: remembers the node to move on the next paste. */
+  cutNode(path: string): void
+  /** Ctrl+V: pastes the buffer, or whatever the system clipboard holds. */
+  paste(destDir: string): Promise<void>
+  clearClip(): void
 }
+
+/**
+ * Recognises a request that was copied out of Frap - either from another
+ * window, or straight out of a `.frap.json` file someone sent you.
+ */
+function asRequestJson(text: string): Partial<FrapRequest> | null {
+  const trimmed = text.trim()
+  if (!trimmed.startsWith('{')) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(trimmed)
+  } catch {
+    return null
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+  const candidate = parsed as Partial<FrapRequest>
+  // Either it declares the format, or it has the two fields that make a request.
+  if (candidate.frap === 1) return candidate
+  if (typeof candidate.method === 'string' && typeof candidate.url === 'string') return candidate
+  return null
+}
+
+const looksLikeCurl = (text: string): boolean => /^\s*curl[\s\\]/i.test(text)
 
 const StoreContext = createContext<{ state: State; actions: Actions } | null>(null)
 
@@ -413,6 +480,47 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
       }
     },
     [toast]
+  )
+
+  const setCollapsed = useCallback((folder: string, value: boolean) => {
+    const collapsed = { ...ref.current.collapsed }
+    if (value) collapsed[folder] = true
+    else delete collapsed[folder]
+    dispatch({ type: 'collapsed', collapsed })
+    if (ref.current.root) {
+      void api.setState({ collapsedFolders: Object.keys(collapsed) })
+    }
+  }, [])
+
+  const importCurlInternal = useCallback(
+    async (dir: string, text: string, substitute: boolean, name?: string) => {
+      const result = await guard(() => api.importCurl(dir, text, substitute, name))
+      if (!result) return
+      dispatch({ type: 'importCurlInto', dir: null })
+      setCollapsed(dir, false)
+      await refresh()
+      dispatch({ type: 'selected', path: result.path })
+      await openTabInternal(result.path)
+      setTimeout(persistTabs, 0)
+      for (const warning of result.warnings) toast('info', warning)
+      toast('success', 'Imported from cURL')
+    },
+    [guard, openTabInternal, persistTabs, refresh, setCollapsed, toast]
+  )
+
+  /** Shared tail of every paste: reveal the result and select it. */
+  const afterPaste = useCallback(
+    async (destDir: string, created: string, open: boolean) => {
+      // A paste into a collapsed folder would otherwise land out of sight.
+      setCollapsed(destDir, false)
+      await refresh()
+      dispatch({ type: 'selected', path: created })
+      if (open && created.endsWith(REQUEST_EXT)) {
+        await openTabInternal(created)
+        setTimeout(persistTabs, 0)
+      }
+    },
+    [openTabInternal, persistTabs, refresh, setCollapsed]
   )
 
   const actions = useMemo<Actions>(
@@ -615,16 +723,7 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
         dispatch({ type: 'importCurlInto', dir })
       },
 
-      async importCurl(dir, text, substitute, name) {
-        const result = await guard(() => api.importCurl(dir, text, substitute, name))
-        if (!result) return
-        dispatch({ type: 'importCurlInto', dir: null })
-        await refresh()
-        await openTabInternal(result.path)
-        setTimeout(persistTabs, 0)
-        for (const warning of result.warnings) toast('info', warning)
-        toast('success', 'Imported from cURL')
-      },
+      importCurl: importCurlInternal,
 
       setSidebarView(view) {
         dispatch({ type: 'sidebarView', view })
@@ -647,18 +746,99 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
       },
 
       toggleFolder(path) {
-        const collapsed = { ...ref.current.collapsed, [path]: !ref.current.collapsed[path] }
-        dispatch({ type: 'collapsed', collapsed })
-        if (ref.current.root) {
-          void api.setState({
-            collapsedFolders: Object.entries(collapsed)
-              .filter(([, isCollapsed]) => isCollapsed)
-              .map(([folder]) => folder)
-          })
+        setCollapsed(path, !ref.current.collapsed[path])
+      },
+
+      expandFolder(path) {
+        if (ref.current.collapsed[path]) setCollapsed(path, false)
+      },
+
+      /* -- collection tree keyboard ----------------------------------- */
+
+      select(path) {
+        dispatch({ type: 'selected', path })
+      },
+
+      beginRename(path) {
+        dispatch({ type: 'renaming', path })
+      },
+
+      async copyNode(path) {
+        dispatch({ type: 'clip', clip: { path, mode: 'copy' } })
+        // Also put the request on the system clipboard, so it can be pasted
+        // into another Frap window, a file, or a message to a colleague.
+        if (path.endsWith(REQUEST_EXT)) {
+          const tab = ref.current.tabs.find((t) => t.path === path)
+          const request = tab?.request ?? (await api.readRequest(path).catch(() => null))
+          if (request) void api.clipboard.write(JSON.stringify(request, null, 2))
         }
+        toast('info', `Copied ${labelOf(path)}`)
+      },
+
+      cutNode(path) {
+        dispatch({ type: 'clip', clip: { path, mode: 'cut' } })
+        toast('info', `Cut ${labelOf(path)} - paste into a folder to move it`)
+      },
+
+      clearClip() {
+        dispatch({ type: 'clip', clip: null })
+      },
+
+      async paste(destDir) {
+        const clip = ref.current.clip
+
+        if (clip) {
+          if (clip.mode === 'cut') {
+            const moved = await guard(() => api.move(clip.path, destDir))
+            if (!moved) return
+            if (ref.current.tabs.some((t) => t.path === clip.path)) {
+              const name = ref.current.tabs.find((t) => t.path === clip.path)!.request.name
+              dispatch({ type: 'retitleTab', from: clip.path, to: moved, name })
+              setTimeout(persistTabs, 0)
+            }
+            // A cut can only be pasted once; a copy can be pasted repeatedly.
+            dispatch({ type: 'clip', clip: null })
+            await afterPaste(destDir, moved, false)
+            return
+          }
+
+          const copied = await guard(() => api.copyNode(clip.path, destDir))
+          if (!copied) return
+          await afterPaste(destDir, copied, true)
+          return
+        }
+
+        // Nothing of ours in hand: fall back to whatever the system clipboard
+        // holds, so a request or a cURL command from anywhere else pastes too.
+        const text = await api.clipboard.read().catch(() => '')
+        const request = asRequestJson(text)
+        if (request) {
+          const created = await guard(() => api.createRequestFrom(destDir, request))
+          if (!created) return
+          await afterPaste(destDir, created, true)
+          toast('success', 'Pasted request')
+          return
+        }
+        if (looksLikeCurl(text)) {
+          await importCurlInternal(destDir, text, true)
+          return
+        }
+        toast('info', 'Nothing to paste. Copy a request first, or a cURL command.')
       }
     }),
-    [guard, loadHistory, loadVariables, open, openTabInternal, persistTabs, refresh, toast]
+    [
+      afterPaste,
+      guard,
+      importCurlInternal,
+      loadHistory,
+      loadVariables,
+      open,
+      openTabInternal,
+      persistTabs,
+      refresh,
+      setCollapsed,
+      toast
+    ]
   )
 
   // Boot: reopen the most recent workspace.

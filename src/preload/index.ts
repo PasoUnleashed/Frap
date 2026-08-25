@@ -30,6 +30,10 @@ const EVENTS = [
   'menu:copyCurl',
   'menu:save',
   'menu:closeTab',
+  'menu:closeOtherTabs',
+  'menu:closeAllTabs',
+  'menu:nextTab',
+  'menu:prevTab',
   'menu:send',
   'menu:cancel',
   'menu:focusUrl',
@@ -60,6 +64,8 @@ const api = {
     save: (absPath: string, req: unknown) => call<boolean>('request:save', absPath, req),
     create: (parentDir: string, name?: string) => call<string>('request:create', parentDir, name),
     duplicate: (absPath: string) => call<string>('request:duplicate', absPath),
+    createFrom: (parentDir: string, request: unknown) =>
+      call<string>('request:createFrom', parentDir, request),
     toCurl: (absPath: string, req?: unknown) =>
       call<{ command: string; missing: string[] }>('request:toCurl', absPath, req)
   },
@@ -96,6 +102,7 @@ const api = {
     createFolder: (parentDir: string, name?: string) => call<string>('folder:create', parentDir, name),
     rename: (absPath: string, name: string) => call<string>('node:rename', absPath, name),
     move: (absPath: string, destDir: string) => call<string>('node:move', absPath, destDir),
+    copy: (absPath: string, destDir: string) => call<string>('node:copy', absPath, destDir),
     reorder: (parentDir: string, ordered: string[]) => call<boolean>('node:reorder', parentDir, ordered),
     remove: (absPath: string) => call<boolean>('node:delete', absPath)
   },

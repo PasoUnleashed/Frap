@@ -35,6 +35,31 @@ test('marking a folder covers everything inside it', () => {
   assert.equal(tracker.has(at('Archived.frap.json')), false)
 })
 
+test('the folder a file was written into counts as ours', () => {
+  const tracker = new SelfWriteTracker()
+  // Writing a file bumps its folder's mtime, and the recursive watcher
+  // reports that folder as its own event.
+  tracker.mark(at('Webhooks', 'Get user.frap.json'))
+  assert.equal(tracker.has(at('Webhooks')), true)
+})
+
+test('a sibling written by someone else is still reported', () => {
+  const tracker = new SelfWriteTracker()
+  tracker.mark(at('Webhooks', 'Get user.frap.json'))
+  // The parent folder is ours only by equality: a prefix match here would
+  // hide every other change in the folder during the grace window.
+  assert.equal(tracker.has(at('Webhooks', 'Pulled by git.frap.json')), false)
+})
+
+test('the parent mark expires with everything else', () => {
+  let clock = 1000
+  const tracker = new SelfWriteTracker(500, () => clock)
+  tracker.mark(at('Webhooks', 'Get user.frap.json'))
+  assert.equal(tracker.has(at('Webhooks')), true)
+  clock += 501
+  assert.equal(tracker.has(at('Webhooks')), false)
+})
+
 test('marks expire, so a later external edit is still reported', () => {
   let clock = 1000
   const tracker = new SelfWriteTracker(500, () => clock)

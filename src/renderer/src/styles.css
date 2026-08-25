@@ -293,6 +293,12 @@ input[type='checkbox'] {
 .workspace-chip:hover {
   border-color: var(--border-strong);
 }
+.workspace-chip > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto;
+}
 .workspace-chip .path {
   color: var(--text-faint);
   font-size: 11px;
@@ -379,6 +385,9 @@ input[type='checkbox'] {
   flex: 1;
   overflow: auto;
   padding: 4px 0 20px;
+  /* Focusable so it can own the keyboard, but the selected row is the cue -
+     a ring around the whole panel would be noise. */
+  outline: none;
 }
 
 .tree-row {
@@ -393,9 +402,26 @@ input[type='checkbox'] {
 .tree-row:hover {
   background: var(--panel-2);
 }
-.tree-row.active {
+/* Two different things, deliberately shown differently: `open` is the request
+   currently in the active tab, `selected` is what the keyboard acts on. */
+.tree-row.open {
   background: var(--elevated);
   border-left-color: var(--accent);
+}
+.tree-row.selected {
+  background: var(--panel-2);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+.tree-row.open.selected {
+  background: var(--elevated);
+}
+.tree:focus-visible .tree-row.selected {
+  box-shadow: inset 0 0 0 1px var(--accent-dim);
+  background: rgba(91, 140, 255, 0.1);
+}
+/* A cut row stays put until it is pasted, so it is dimmed rather than hidden. */
+.tree-row.cut {
+  opacity: 0.45;
 }
 .tree-row.drop-target {
   background: rgba(91, 140, 255, 0.14);
@@ -465,6 +491,36 @@ input[type='checkbox'] {
   gap: 8px;
 }
 
+/* What Ctrl+C / Ctrl+X are holding. Modal state, so it stays visible. */
+.clip-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px 7px;
+  font-size: 11px;
+  background: var(--panel-2);
+  border: 1px dashed var(--border-strong);
+}
+.clip-chip .what {
+  color: var(--accent);
+  font-weight: 600;
+  flex: none;
+}
+.clip-chip .who {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+.clip-chip .x {
+  color: var(--text-faint);
+  flex: none;
+}
+.clip-chip:hover .x {
+  color: var(--text);
+}
+
 /* ---------------------------------------------------------------- */
 /* Main pane                                                         */
 /* ---------------------------------------------------------------- */
@@ -476,17 +532,67 @@ input[type='checkbox'] {
   min-height: 0;
 }
 
+/* The strip scrolls; the arrows and the tab list sit outside it so they stay
+   reachable however many tabs are open. */
+.tabstrip-row {
+  display: flex;
+  align-items: stretch;
+  flex: none;
+  min-width: 0;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  min-height: 33px;
+}
+
 .tabstrip {
   display: flex;
   align-items: stretch;
-  background: var(--panel);
-  border-bottom: 1px solid var(--border);
+  flex: 1;
+  min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
-  min-height: 33px;
+  scroll-behavior: smooth;
 }
+/* No visible scrollbar: the arrows and the wheel are the affordance. */
 .tabstrip::-webkit-scrollbar {
   height: 0;
+}
+
+.tab-nav {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 9px;
+  border: none;
+  border-radius: 0;
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text-dim);
+  font-size: 15px;
+  line-height: 1;
+}
+.tabstrip-row > .tab-nav:first-child {
+  border-left: none;
+  border-right: 1px solid var(--border);
+}
+.tab-nav:hover:not(:disabled) {
+  background: var(--elevated);
+  color: var(--text);
+}
+.tab-nav:disabled {
+  opacity: 0.3;
+}
+.tab-nav.list {
+  font-size: 13px;
+}
+.tab-nav .count {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--accent-dim);
+  color: #dfe7ff;
 }
 
 .tab {
@@ -498,6 +604,10 @@ input[type='checkbox'] {
   cursor: pointer;
   color: var(--text-dim);
   white-space: nowrap;
+  /* Tabs shrink to a readable minimum before the strip starts scrolling.
+     Below about this width the method badge crowds the name out entirely. */
+  flex: 0 1 auto;
+  min-width: 142px;
   max-width: 230px;
   border-top: 2px solid transparent;
 }

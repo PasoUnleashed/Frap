@@ -7,7 +7,6 @@ import { promises as fs, watch, type FSWatcher } from 'node:fs'
 import * as path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import {
-  REQUEST_EXT,
   WORKSPACE_FILE,
   type EnvFileView,
   type ExecResult,
@@ -32,6 +31,7 @@ import { parseCurl, toCurl } from './curl.ts'
 import { toMutable } from './prepare.ts'
 import { SelfWriteTracker } from './selfwrites.ts'
 import {
+  copyNode,
   createFolder,
   createRequest,
   duplicateRequest,
@@ -41,10 +41,9 @@ import {
   readRequest,
   renameNode,
   reorder,
-  sanitizeName,
   scanTree,
-  serializeRequest,
   writeConfig,
+  writeNewRequest,
   writeRequest,
   assertInside
 } from './workspace.ts'
@@ -64,9 +63,11 @@ import {
 export interface ContextMenuItem {
   id?: string
   label?: string
-  type?: 'separator'
+  type?: 'separator' | 'checkbox'
   enabled?: boolean
   accelerator?: string
+  /** Ticks a checkbox item - used to mark the current tab in a long list. */
+  checked?: boolean
 }
 
 /** Session variables live for as long as the app runs, keyed by workspace. */
@@ -369,20 +370,20 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     const { request, warnings } = parseCurl(text, scope, substitute)
     if (name?.trim()) request.name = name.trim()
 
-    await fs.mkdir(target, { recursive: true })
-    const base = sanitizeName(request.name)
-    let file = path.join(target, base + REQUEST_EXT)
-    for (let n = 2; ; n++) {
-      if (!(await fs.stat(file).catch(() => null))) break
-      file = path.join(target, `${base} ${n}${REQUEST_EXT}`)
-    }
-
-    const siblings = await scanTree(root, target)
-    request.name = path.basename(file).slice(0, -REQUEST_EXT.length)
-    request.order = siblings.reduce((m, n) => Math.max(m, n.order), 0) + 1
+    const file = await writeNewRequest(root, target, request)
     markSelfWrite(file)
-    await fs.writeFile(file, serializeRequest(request), 'utf8')
     return { path: file, warnings }
+  })
+
+  /** Creates a request from a JSON object - what pasting a request does. */
+  handle('request:createFrom', async (parentDir: string, input: Partial<FrapRequest>) => {
+    const { root } = requireWorkspace()
+    const target = parentDir || root
+    assertInside(root, target)
+    const request = normalizeRequest(input, 'Pasted Request')
+    const file = await writeNewRequest(root, target, request)
+    markSelfWrite(file)
+    return file
   })
 
   handle('folder:create', async (parentDir: string, name?: string) => {
@@ -406,6 +407,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     const moved = await moveNode(root, absPath, destDir)
     markSelfWrite(moved)
     return moved
+  })
+
+  handle('node:copy', async (absPath: string, destDir: string) => {
+    const { root } = requireWorkspace()
+    const copied = await copyNode(root, absPath, destDir)
+    markSelfWrite(copied)
+    return copied
   })
 
   handle('node:reorder', async (parentDir: string, orderedPaths: string[]) => {
@@ -617,6 +625,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
           ? { type: 'separator' }
           : {
               label: item.label,
+              type: item.type === 'checkbox' ? 'checkbox' : undefined,
+              checked: item.checked,
               enabled: item.enabled !== false,
               accelerator: item.accelerator,
               click: () => {

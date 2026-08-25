@@ -29,9 +29,11 @@ export interface LayoutState {
 export interface MenuItem {
   id?: string
   label?: string
-  type?: 'separator'
+  type?: 'separator' | 'checkbox'
   enabled?: boolean
   accelerator?: string
+  /** Ticks a checkbox item - used to mark the current tab in a long list. */
+  checked?: boolean
 }
 
 export interface OpenedWorkspace {
@@ -65,6 +67,9 @@ export const api = {
   saveRequest: (absPath: string, req: FrapRequest) => bridge.requests.save(absPath, req),
   createRequest: (parentDir: string, name?: string) => bridge.requests.create(parentDir, name),
   duplicateRequest: (absPath: string) => bridge.requests.duplicate(absPath),
+  /** Materialises a pasted request object as a new file. */
+  createRequestFrom: (parentDir: string, request: Partial<FrapRequest>) =>
+    bridge.requests.createFrom(parentDir, request),
 
   /** Copies the request to the clipboard as a runnable cURL command. */
   toCurl: (absPath: string, req?: FrapRequest) => bridge.requests.toCurl(absPath, req),
@@ -88,6 +93,7 @@ export const api = {
   createFolder: (parentDir: string, name?: string) => bridge.nodes.createFolder(parentDir, name),
   rename: (absPath: string, name: string) => bridge.nodes.rename(absPath, name),
   move: (absPath: string, destDir: string) => bridge.nodes.move(absPath, destDir),
+  copyNode: (absPath: string, destDir: string) => bridge.nodes.copy(absPath, destDir),
   reorder: (parentDir: string, ordered: string[]) => bridge.nodes.reorder(parentDir, ordered),
   remove: (absPath: string) => bridge.nodes.remove(absPath),
 

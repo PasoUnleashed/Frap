@@ -1,36 +1,82 @@
-import { useMemo, useState, type DragEvent, type JSX, type MouseEvent } from 'react'
-import type { TreeNode } from '@shared/types'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+  type JSX,
+  type KeyboardEvent,
+  type MouseEvent
+} from 'react'
+import { REQUEST_EXT, type TreeNode } from '@shared/types'
 import { api, type MenuItem } from '../api'
 import { isDirty, useStore } from '../store'
 import { HistoryList } from './HistoryList'
 
 const SEPARATOR: MenuItem = { type: 'separator' }
 
+const dirOf = (target: string): string => target.replace(/[\\/][^\\/]+$/, '')
+
 function matches(node: TreeNode, needle: string): boolean {
   if (node.name.toLowerCase().includes(needle)) return true
   return (node.children ?? []).some((child) => matches(child, needle))
 }
 
-interface RowProps {
+/**
+ * The tree as a flat list of visible rows.
+ *
+ * Rendering it flat rather than recursively is what makes arrow-key
+ * navigation a one-line index change instead of a tree walk.
+ */
+interface FlatRow {
   node: TreeNode
   depth: number
+}
+
+function flatten(
+  nodes: TreeNode[],
+  collapsed: Record<string, boolean>,
+  filter: string,
+  depth = 0,
+  out: FlatRow[] = []
+): FlatRow[] {
+  for (const node of nodes) {
+    if (filter && !matches(node, filter)) continue
+    out.push({ node, depth })
+    // A filter reveals everything that matched, however folders were left.
+    const open = filter ? true : !collapsed[node.path]
+    if (node.kind === 'folder' && open) {
+      flatten(node.children ?? [], collapsed, filter, depth + 1, out)
+    }
+  }
+  return out
+}
+
+/* ------------------------------------------------------------------ */
+/* Row                                                                 */
+/* ------------------------------------------------------------------ */
+
+interface RowProps {
+  row: FlatRow
   filter: string
   dragOver: string | null
   setDragOver: (path: string | null) => void
 }
 
-function Row({ node, depth, filter, dragOver, setDragOver }: RowProps): JSX.Element | null {
+function Row({ row, filter, dragOver, setDragOver }: RowProps): JSX.Element {
   const { state, actions } = useStore()
-  const [renaming, setRenaming] = useState(false)
-
-  if (filter && !matches(node, filter)) return null
+  const { node, depth } = row
 
   const isFolder = node.kind === 'folder'
-  // A filtered search reveals everything that matched.
   const open = filter ? true : !state.collapsed[node.path]
-  const active = state.activeTab === node.path
+  const openInTab = state.activeTab === node.path
+  const selected = state.selected === node.path
+  const renaming = state.renaming === node.path
+  const cut = state.clip?.mode === 'cut' && state.clip.path === node.path
   const tab = state.tabs.find((t) => t.path === node.path)
   const unsaved = tab ? isDirty(tab) : false
+
+  const parentDir = isFolder ? node.path : dirOf(node.path)
 
   const onDragStart = (event: DragEvent): void => {
     event.dataTransfer.setData('text/frap-path', node.path)
@@ -53,7 +99,7 @@ function Row({ node, depth, filter, dragOver, setDragOver }: RowProps): JSX.Elem
   }
 
   const commitRename = (value: string): void => {
-    setRenaming(false)
+    actions.beginRename(null)
     const next = value.trim()
     if (next && next !== node.name) void actions.rename(node.path, next)
   }
@@ -61,6 +107,13 @@ function Row({ node, depth, filter, dragOver, setDragOver }: RowProps): JSX.Elem
   const onContextMenu = async (event: MouseEvent): Promise<void> => {
     event.preventDefault()
     event.stopPropagation()
+    actions.select(node.path)
+
+    const clipboardItems: MenuItem[] = [
+      { id: 'copy', label: 'Copy', accelerator: 'CmdOrCtrl+C' },
+      { id: 'cut', label: 'Cut', accelerator: 'CmdOrCtrl+X' },
+      { id: 'paste', label: isFolder ? 'Paste Into Folder' : 'Paste', accelerator: 'CmdOrCtrl+V' }
+    ]
 
     const items: MenuItem[] = isFolder
       ? [
@@ -68,25 +121,27 @@ function Row({ node, depth, filter, dragOver, setDragOver }: RowProps): JSX.Elem
           { id: 'new-folder', label: 'New Folder' },
           { id: 'import-curl', label: 'Import from cURL...', accelerator: 'CmdOrCtrl+I' },
           SEPARATOR,
-          { id: 'rename', label: 'Rename' },
+          ...clipboardItems,
+          SEPARATOR,
+          { id: 'rename', label: 'Rename', accelerator: 'F2' },
           { id: 'reveal', label: 'Show in File Manager' },
           SEPARATOR,
-          { id: 'delete', label: 'Move to Trash' }
+          { id: 'delete', label: 'Move to Trash', accelerator: 'Delete' }
         ]
       : [
           { id: 'open', label: 'Open' },
           SEPARATOR,
+          ...clipboardItems,
+          { id: 'duplicate', label: 'Duplicate', accelerator: 'CmdOrCtrl+D' },
+          SEPARATOR,
           { id: 'copy-curl', label: 'Copy as cURL', accelerator: 'CmdOrCtrl+Shift+C' },
           { id: 'copy-path', label: 'Copy File Path' },
           SEPARATOR,
-          { id: 'rename', label: 'Rename' },
-          { id: 'duplicate', label: 'Duplicate' },
+          { id: 'rename', label: 'Rename', accelerator: 'F2' },
           { id: 'reveal', label: 'Show in File Manager' },
           SEPARATOR,
-          { id: 'delete', label: 'Move to Trash' }
+          { id: 'delete', label: 'Move to Trash', accelerator: 'Delete' }
         ]
-
-    const parentDir = isFolder ? node.path : node.path.replace(/[\\/][^\\/]+$/, '')
 
     switch (await api.contextMenu(items)) {
       case 'open':
@@ -101,6 +156,18 @@ function Row({ node, depth, filter, dragOver, setDragOver }: RowProps): JSX.Elem
       case 'import-curl':
         actions.openImportCurl(parentDir)
         break
+      case 'copy':
+        void actions.copyNode(node.path)
+        break
+      case 'cut':
+        actions.cutNode(node.path)
+        break
+      case 'paste':
+        void actions.paste(parentDir)
+        break
+      case 'duplicate':
+        void actions.duplicate(node.path)
+        break
       case 'copy-curl':
         void actions.copyCurl(node.path)
         break
@@ -109,10 +176,7 @@ function Row({ node, depth, filter, dragOver, setDragOver }: RowProps): JSX.Elem
         actions.toast('success', 'Path copied')
         break
       case 'rename':
-        setRenaming(true)
-        break
-      case 'duplicate':
-        void actions.duplicate(node.path)
+        actions.beginRename(node.path)
         break
       case 'reveal':
         void api.reveal(node.path)
@@ -125,94 +189,106 @@ function Row({ node, depth, filter, dragOver, setDragOver }: RowProps): JSX.Elem
     }
   }
 
+  const classes = [
+    'tree-row',
+    openInTab ? 'open' : '',
+    selected ? 'selected' : '',
+    cut ? 'cut' : '',
+    dragOver === node.path ? 'drop-target' : ''
+  ]
+    .filter(Boolean)
+    .join(' ')
+
   return (
-    <>
-      <div
-        className={`tree-row${active ? ' active' : ''}${dragOver === node.path ? ' drop-target' : ''}`}
-        style={{ paddingLeft: 6 + depth * 12 }}
-        draggable={!renaming}
-        onDragStart={onDragStart}
-        onDragOver={onDragOver}
-        onDragLeave={() => dragOver === node.path && setDragOver(null)}
-        onDrop={onDrop}
-        onClick={() => (isFolder ? actions.toggleFolder(node.path) : void actions.openTab(node.path))}
-        onDoubleClick={() => setRenaming(true)}
-        onContextMenu={(e) => void onContextMenu(e)}
-        title={node.relPath}
-      >
-        <span className="caret">{isFolder ? (open ? '▼' : '▶') : ''}</span>
+    <div
+      className={classes}
+      data-path={node.path}
+      style={{ paddingLeft: 6 + depth * 12 }}
+      draggable={!renaming}
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDragLeave={() => dragOver === node.path && setDragOver(null)}
+      onDrop={onDrop}
+      onClick={() => {
+        actions.select(node.path)
+        if (isFolder) actions.toggleFolder(node.path)
+        else void actions.openTab(node.path)
+      }}
+      onDoubleClick={() => actions.beginRename(node.path)}
+      onContextMenu={(e) => void onContextMenu(e)}
+      title={node.relPath}
+    >
+      <span className="caret">{isFolder ? (open ? '▼' : '▶') : ''}</span>
+      {isFolder ? (
+        <span className="method other">DIR</span>
+      ) : (
+        <span className={`method ${(node.method ?? 'get').toLowerCase()}`}>{node.method}</span>
+      )}
+
+      {renaming ? (
+        <input
+          type="text"
+          defaultValue={node.name}
+          autoFocus
+          onClick={(e) => e.stopPropagation()}
+          onBlur={(e) => commitRename(e.target.value)}
+          onKeyDown={(e) => {
+            e.stopPropagation()
+            if (e.key === 'Enter') commitRename((e.target as HTMLInputElement).value)
+            if (e.key === 'Escape') actions.beginRename(null)
+          }}
+        />
+      ) : (
+        <span className={`label${unsaved ? ' unsaved' : ''}`}>{node.name}</span>
+      )}
+
+      <span className="actions" onClick={(e) => e.stopPropagation()}>
         {isFolder ? (
-          <span className="method other">DIR</span>
-        ) : (
-          <span className={`method ${(node.method ?? 'get').toLowerCase()}`}>{node.method}</span>
-        )}
-
-        {renaming ? (
-          <input
-            type="text"
-            defaultValue={node.name}
-            autoFocus
-            onClick={(e) => e.stopPropagation()}
-            onBlur={(e) => commitRename(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') commitRename((e.target as HTMLInputElement).value)
-              if (e.key === 'Escape') setRenaming(false)
-            }}
-          />
-        ) : (
-          <span className={`label${unsaved ? ' unsaved' : ''}`}>{node.name}</span>
-        )}
-
-        <span className="actions" onClick={(e) => e.stopPropagation()}>
-          {isFolder ? (
-            <>
-              <button
-                className="ghost"
-                title="New request here"
-                onClick={() => void actions.createRequest(node.path)}
-              >
-                +
-              </button>
-              <button
-                className="ghost"
-                title="New folder here"
-                onClick={() => void actions.createFolder(node.path)}
-              >
-                ⊞
-              </button>
-            </>
-          ) : (
+          <>
             <button
               className="ghost"
-              title="Copy as cURL"
-              onClick={() => void actions.copyCurl(node.path)}
+              title="New request here"
+              onClick={() => void actions.createRequest(node.path)}
             >
-              ⌘
+              +
             </button>
-          )}
-        </span>
-      </div>
-
-      {isFolder &&
-        open &&
-        (node.children ?? []).map((child) => (
-          <Row
-            key={child.path}
-            node={child}
-            depth={depth + 1}
-            filter={filter}
-            dragOver={dragOver}
-            setDragOver={setDragOver}
-          />
-        ))}
-    </>
+            <button
+              className="ghost"
+              title="New folder here"
+              onClick={() => void actions.createFolder(node.path)}
+            >
+              ⊞
+            </button>
+          </>
+        ) : (
+          <button
+            className="ghost"
+            title="Copy as cURL"
+            onClick={() => void actions.copyCurl(node.path)}
+          >
+            ⌘
+          </button>
+        )}
+      </span>
+    </div>
   )
 }
+
+/* ------------------------------------------------------------------ */
+/* Sidebar                                                             */
+/* ------------------------------------------------------------------ */
 
 export function Sidebar(): JSX.Element {
   const { state, actions } = useStore()
   const [filter, setFilter] = useState('')
   const [dragOver, setDragOver] = useState<string | null>(null)
+  const treeRef = useRef<HTMLDivElement | null>(null)
+
+  const needle = filter.trim().toLowerCase()
+  const rows = useMemo(
+    () => flatten(state.tree, state.collapsed, needle),
+    [state.tree, state.collapsed, needle]
+  )
 
   const counts = useMemo(() => {
     let requests = 0
@@ -229,11 +305,152 @@ export function Sidebar(): JSX.Element {
     return { requests, folders }
   }, [state.tree])
 
+  // When the rename box closes, its input unmounts and focus would otherwise
+  // fall to the body, leaving the tree deaf to the keyboard.
+  const wasRenaming = useRef(false)
+  useEffect(() => {
+    if (wasRenaming.current && !state.renaming) treeRef.current?.focus()
+    wasRenaming.current = state.renaming !== null
+  }, [state.renaming])
+
+  // Keep the selected row on screen when the keyboard moves it.
+  useEffect(() => {
+    if (!state.selected) return
+    treeRef.current
+      ?.querySelector<HTMLElement>(`[data-path="${CSS.escape(state.selected)}"]`)
+      ?.scrollIntoView({ block: 'nearest' })
+  }, [state.selected])
+
   const onRootDrop = (event: DragEvent): void => {
     event.preventDefault()
     setDragOver(null)
     const source = event.dataTransfer.getData('text/frap-path')
     if (source && state.root) void actions.move(source, state.root)
+  }
+
+  /** Where a paste lands: the selected folder, or the folder holding it. */
+  const pasteTarget = (): string | null => {
+    if (!state.root) return null
+    if (!state.selected) return state.root
+    const row = rows.find((r) => r.node.path === state.selected)
+    if (!row) return state.root
+    return row.node.kind === 'folder' ? row.node.path : dirOf(row.node.path)
+  }
+
+  /**
+   * Shortcuts live here rather than on the window, so Ctrl+C in the URL bar or
+   * a script editor still means "copy text".
+   */
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    const target = event.target as HTMLElement
+    // The inline rename box handles its own keys.
+    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
+
+    const index = rows.findIndex((r) => r.node.path === state.selected)
+    const current = index >= 0 ? rows[index] : null
+    const mod = event.ctrlKey || event.metaKey
+    const handled = (): void => {
+      event.preventDefault()
+      event.stopPropagation()
+    }
+    const selectAt = (next: number): void => {
+      const row = rows[Math.min(rows.length - 1, Math.max(0, next))]
+      if (row) actions.select(row.node.path)
+    }
+
+    if (mod && !event.altKey) {
+      switch (event.key.toLowerCase()) {
+        case 'c':
+          if (!current) return
+          handled()
+          void actions.copyNode(current.node.path)
+          return
+        case 'x':
+          if (!current) return
+          handled()
+          actions.cutNode(current.node.path)
+          return
+        case 'v': {
+          const dest = pasteTarget()
+          if (!dest) return
+          handled()
+          void actions.paste(dest)
+          return
+        }
+        case 'd':
+          if (!current || current.node.kind !== 'request') return
+          handled()
+          void actions.duplicate(current.node.path)
+          return
+        default:
+          return
+      }
+    }
+
+    switch (event.key) {
+      case 'ArrowDown':
+        handled()
+        selectAt(index < 0 ? 0 : index + 1)
+        return
+      case 'ArrowUp':
+        handled()
+        selectAt(index < 0 ? rows.length - 1 : index - 1)
+        return
+      case 'ArrowRight':
+        if (!current) return
+        handled()
+        if (current.node.kind === 'folder' && state.collapsed[current.node.path]) {
+          actions.expandFolder(current.node.path)
+        } else {
+          selectAt(index + 1)
+        }
+        return
+      case 'ArrowLeft': {
+        if (!current) return
+        handled()
+        if (current.node.kind === 'folder' && !state.collapsed[current.node.path]) {
+          actions.toggleFolder(current.node.path)
+          return
+        }
+        // Otherwise jump to the folder this row sits in.
+        const parent = dirOf(current.node.path)
+        const parentRow = rows.find((r) => r.node.path === parent)
+        if (parentRow) actions.select(parentRow.node.path)
+        return
+      }
+      case 'Home':
+        handled()
+        selectAt(0)
+        return
+      case 'End':
+        handled()
+        selectAt(rows.length - 1)
+        return
+      case 'Enter':
+        if (!current) return
+        handled()
+        if (current.node.kind === 'folder') actions.toggleFolder(current.node.path)
+        else void actions.openTab(current.node.path)
+        return
+      case 'F2':
+        if (!current) return
+        handled()
+        actions.beginRename(current.node.path)
+        return
+      case 'Delete':
+      case 'Backspace':
+        if (!current) return
+        handled()
+        void actions.remove(current.node.path, current.node.name)
+        return
+      case 'Escape':
+        if (!state.clip) return
+        handled()
+        actions.clearClip()
+        return
+      default:
+        break
+    }
   }
 
   /** Right-clicking empty space targets the workspace root. */
@@ -244,6 +461,8 @@ export function Sidebar(): JSX.Element {
       { id: 'new-request', label: 'New Request', accelerator: 'CmdOrCtrl+N' },
       { id: 'new-folder', label: 'New Folder', accelerator: 'CmdOrCtrl+Shift+N' },
       { id: 'import-curl', label: 'Import from cURL...', accelerator: 'CmdOrCtrl+I' },
+      SEPARATOR,
+      { id: 'paste', label: 'Paste', accelerator: 'CmdOrCtrl+V' },
       SEPARATOR,
       { id: 'refresh', label: 'Reload from Disk', accelerator: 'CmdOrCtrl+R' },
       { id: 'reveal', label: 'Show in File Manager' }
@@ -257,6 +476,9 @@ export function Sidebar(): JSX.Element {
         break
       case 'import-curl':
         actions.openImportCurl(state.root)
+        break
+      case 'paste':
+        void actions.paste(state.root)
         break
       case 'refresh':
         void actions.refresh()
@@ -315,27 +537,37 @@ export function Sidebar(): JSX.Element {
 
           <div
             className="tree"
+            ref={treeRef}
+            tabIndex={0}
+            onKeyDown={onKeyDown}
+            onMouseDown={() => treeRef.current?.focus()}
             onDragOver={(e) => {
               if (e.dataTransfer.types.includes('text/frap-path')) e.preventDefault()
             }}
             onDrop={onRootDrop}
             onContextMenu={(e) => void onRootContextMenu(e)}
           >
-            {state.tree.length === 0 ? (
+            {rows.length === 0 ? (
               <div className="tree-empty">
-                Nothing here yet.
-                <br />
-                <br />
-                Right-click to add a request or paste one in from cURL. Every request is one{' '}
-                <code className="mono">.frap.json</code> file, so this folder is safe to commit.
+                {state.tree.length === 0 ? (
+                  <>
+                    Nothing here yet.
+                    <br />
+                    <br />
+                    Right-click to add a request, or copy a cURL command and press{' '}
+                    <b>Ctrl+V</b>. Every request is one <code className="mono">.frap.json</code>{' '}
+                    file, so this folder is safe to commit.
+                  </>
+                ) : (
+                  <>No request matches “{filter.trim()}”.</>
+                )}
               </div>
             ) : (
-              state.tree.map((node) => (
+              rows.map((row) => (
                 <Row
-                  key={node.path}
-                  node={node}
-                  depth={0}
-                  filter={filter.trim().toLowerCase()}
+                  key={row.node.path}
+                  row={row}
+                  filter={needle}
                   dragOver={dragOver}
                   setDragOver={setDragOver}
                 />
@@ -344,10 +576,25 @@ export function Sidebar(): JSX.Element {
           </div>
 
           <div className="sidebar-foot">
-            <span>
-              {counts.requests} request{counts.requests === 1 ? '' : 's'}
-              {counts.folders > 0 && ` · ${counts.folders} folder${counts.folders === 1 ? '' : 's'}`}
-            </span>
+            {state.clip ? (
+              <button
+                className="clip-chip"
+                title="Click to clear. Ctrl+V pastes into the selected folder."
+                onClick={() => actions.clearClip()}
+              >
+                <span className="what">{state.clip.mode === 'cut' ? 'Cut' : 'Copied'}</span>
+                <span className="who">
+                  {state.clip.path.split(/[\\/]/).pop()?.replace(REQUEST_EXT, '')}
+                </span>
+                <span className="x">✕</span>
+              </button>
+            ) : (
+              <span>
+                {counts.requests} request{counts.requests === 1 ? '' : 's'}
+                {counts.folders > 0 &&
+                  ` · ${counts.folders} folder${counts.folders === 1 ? '' : 's'}`}
+              </span>
+            )}
             <span className="spacer" />
             <button className="ghost" title="Reload from disk" onClick={() => void actions.refresh()}>
               ⟳
@@ -360,9 +607,7 @@ export function Sidebar(): JSX.Element {
             <HistoryList />
           </div>
           <div className="sidebar-foot">
-            <span>
-              {state.history.length} sent
-            </span>
+            <span>{state.history.length} sent</span>
             <span className="spacer" />
             <button
               className="ghost"

@@ -72,8 +72,78 @@ function WindowControls(): JSX.Element | null {
 /* Tabs                                                                */
 /* ------------------------------------------------------------------ */
 
+/** How far an arrow click nudges the strip. */
+const TAB_SCROLL_STEP = 220
+
 function TabStrip(): JSX.Element {
   const { state, actions } = useStore()
+  const stripRef = useRef<HTMLDivElement | null>(null)
+
+  // Which arrows to show, and how many tabs are off-screen right now.
+  const [overflow, setOverflow] = useState({ left: false, right: false, hidden: 0 })
+
+  const measure = useCallback(() => {
+    const strip = stripRef.current
+    if (!strip) return
+    const maxScroll = strip.scrollWidth - strip.clientWidth
+    // A sub-pixel remainder is not overflow anyone can see.
+    const left = strip.scrollLeft > 1
+    const right = strip.scrollLeft < maxScroll - 1
+
+    let hidden = 0
+    if (left || right) {
+      const view = strip.getBoundingClientRect()
+      for (const child of strip.children) {
+        const box = child.getBoundingClientRect()
+        if (box.left < view.left - 1 || box.right > view.right + 1) hidden++
+      }
+    }
+    setOverflow((prev) =>
+      prev.left === left && prev.right === right && prev.hidden === hidden
+        ? prev
+        : { left, right, hidden }
+    )
+  }, [])
+
+  // Re-measure whenever the strip resizes or the set of tabs changes.
+  useEffect(() => {
+    const strip = stripRef.current
+    if (!strip) return
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(strip)
+    strip.addEventListener('scroll', measure, { passive: true })
+    return () => {
+      observer.disconnect()
+      strip.removeEventListener('scroll', measure)
+    }
+  }, [measure, state.tabs.length])
+
+  // Selecting a tab from the tree, a menu or Ctrl+Tab must bring it into view.
+  useEffect(() => {
+    if (!state.activeTab) return
+    stripRef.current
+      ?.querySelector<HTMLElement>(`[data-path="${CSS.escape(state.activeTab)}"]`)
+      ?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [state.activeTab, state.tabs.length])
+
+  const nudge = (delta: number): void => {
+    stripRef.current?.scrollBy({ left: delta, behavior: 'smooth' })
+  }
+
+  /** Lists every open tab, so a hidden one is still one click away. */
+  const openOverflowMenu = async (): Promise<void> => {
+    const items: MenuItem[] = state.tabs.map((tab, index) => ({
+      id: String(index),
+      type: 'checkbox',
+      checked: tab.path === state.activeTab,
+      label: `${tab.request.method} ${tab.request.name}${isDirty(tab) ? ' •' : ''}`
+    }))
+    const choice = await api.contextMenu(items)
+    if (choice === null) return
+    const tab = state.tabs[Number(choice)]
+    if (tab) actions.selectTab(tab.path)
+  }
 
   const onContextMenu = async (event: MouseEvent, tab: TabState): Promise<void> => {
     event.preventDefault()
@@ -114,36 +184,82 @@ function TabStrip(): JSX.Element {
     }
   }
 
+  const overflowing = overflow.left || overflow.right
+
   return (
-    <div className="tabstrip">
-      {state.tabs.map((tab) => (
-        <div
-          key={tab.path}
-          className={`tab${state.activeTab === tab.path ? ' active' : ''}`}
-          onClick={() => actions.selectTab(tab.path)}
-          onAuxClick={(e) => e.button === 1 && void actions.closeTab(tab.path)}
-          onContextMenu={(e) => void onContextMenu(e, tab)}
-          title={tab.path}
+    <div className="tabstrip-row">
+      {overflowing && (
+        <button
+          className="tab-nav"
+          disabled={!overflow.left}
+          title="Scroll tabs left"
+          onClick={() => nudge(-TAB_SCROLL_STEP)}
         >
-          <span className={`method ${tab.request.method.toLowerCase()}`} style={{ width: 'auto' }}>
-            {tab.request.method}
-          </span>
-          <span className="name">{tab.request.name}</span>
-          {isDirty(tab) ? (
-            <span className="dot" title="Unsaved changes" />
-          ) : (
-            <span
-              className="close"
-              onClick={(e) => {
-                e.stopPropagation()
-                void actions.closeTab(tab.path)
-              }}
-            >
-              ×
+          ‹
+        </button>
+      )}
+
+      <div
+        className="tabstrip"
+        ref={stripRef}
+        // There is nothing to scroll vertically here, so a plain wheel
+        // gesture moves the strip sideways.
+        onWheel={(e) => {
+          const strip = stripRef.current
+          if (strip && e.deltaY !== 0) strip.scrollLeft += e.deltaY
+        }}
+      >
+        {state.tabs.map((tab) => (
+          <div
+            key={tab.path}
+            data-path={tab.path}
+            className={`tab${state.activeTab === tab.path ? ' active' : ''}`}
+            onClick={() => actions.selectTab(tab.path)}
+            onAuxClick={(e) => e.button === 1 && void actions.closeTab(tab.path)}
+            onContextMenu={(e) => void onContextMenu(e, tab)}
+            title={tab.path}
+          >
+            <span className={`method ${tab.request.method.toLowerCase()}`} style={{ width: 'auto' }}>
+              {tab.request.method}
             </span>
-          )}
-        </div>
-      ))}
+            <span className="name">{tab.request.name}</span>
+            {isDirty(tab) ? (
+              <span className="dot" title="Unsaved changes" />
+            ) : (
+              <span
+                className="close"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  void actions.closeTab(tab.path)
+                }}
+              >
+                ×
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {overflowing && (
+        <>
+          <button
+            className="tab-nav"
+            disabled={!overflow.right}
+            title="Scroll tabs right"
+            onClick={() => nudge(TAB_SCROLL_STEP)}
+          >
+            ›
+          </button>
+          <button
+            className="tab-nav list"
+            title={`${state.tabs.length} open tabs`}
+            onClick={() => void openOverflowMenu()}
+          >
+            ⌄
+            {overflow.hidden > 0 && <span className="count">{overflow.hidden}</span>}
+          </button>
+        </>
+      )}
     </div>
   )
 }
@@ -298,6 +414,13 @@ function Workbench(): JSX.Element {
       const current = active()
       if (current) fn(current)
     }
+    /** Ctrl+Tab wraps around, so a long strip is still fully reachable. */
+    const cycleTab = (step: number): void => {
+      if (state.tabs.length < 2) return
+      const index = state.tabs.findIndex((t) => t.path === state.activeTab)
+      const next = (index + step + state.tabs.length) % state.tabs.length
+      actions.selectTab(state.tabs[next].path)
+    }
     const unsubscribes = [
       window.frap.on('menu:openWorkspace', () => void actions.pickAndOpen()),
       window.frap.on('menu:newRequest', () => state.root && void actions.createRequest(state.root)),
@@ -306,6 +429,19 @@ function Workbench(): JSX.Element {
       window.frap.on('menu:copyCurl', withActive((t) => void actions.copyCurl(t.path))),
       window.frap.on('menu:save', withActive((t) => void actions.save(t.path))),
       window.frap.on('menu:closeTab', withActive((t) => void actions.closeTab(t.path))),
+      window.frap.on(
+        'menu:closeOtherTabs',
+        withActive((t) => {
+          for (const other of state.tabs) {
+            if (other.path !== t.path) void actions.closeTab(other.path)
+          }
+        })
+      ),
+      window.frap.on('menu:closeAllTabs', () => {
+        for (const t of state.tabs) void actions.closeTab(t.path)
+      }),
+      window.frap.on('menu:nextTab', () => cycleTab(1)),
+      window.frap.on('menu:prevTab', () => cycleTab(-1)),
       window.frap.on('menu:send', withActive((t) => void actions.send(t.path))),
       window.frap.on('menu:cancel', withActive((t) => void actions.cancel(t.path))),
       window.frap.on('menu:focusUrl', () => {
