@@ -17,9 +17,12 @@ const theme = createTheme({
     background: '#101218',
     foreground: '#e7eaf1',
     caret: '#5b8cff',
-    selection: '#26355c',
-    selectionMatch: '#26355c',
-    lineHighlight: '#161922',
+    selection: '#2f4785',
+    selectionMatch: '#2c3a5e',
+    // Must stay translucent. CodeMirror paints the selection in a layer at
+    // z-index -1, behind the content, so an opaque line highlight would hide
+    // any selection made within the active line.
+    lineHighlight: 'rgba(126, 160, 255, 0.07)',
     gutterBackground: '#101218',
     gutterForeground: '#4d5566',
     gutterBorder: 'transparent',
