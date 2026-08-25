@@ -1,0 +1,12 @@
+{
+  "frap": 1,
+  "id": "64e91d81-da88-4a39-9c8a-ecfced1de0c6",
+  "name": "Headers",
+  "order": 1,
+  "method": "GET",
+  "url": "{{BASE_URL}}/headers",
+  "scripts": {
+    "preRequest": "// Dynamic values are generated fresh on every send.\nfrap.request.setHeader('X-Request-Id', crypto.randomUUID())\nfrap.request.setHeader('X-Sent-At', new Date().toISOString())",
+    "postResponse": "frap.test('our header made it through', () => {\n  const headers = frap.response.json().headers\n  frap.expect(headers['X-Request-Id']).toBeDefined()\n})"
+  }
+}

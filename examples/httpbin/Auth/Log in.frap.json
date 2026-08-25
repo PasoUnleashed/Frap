@@ -1,0 +1,22 @@
+{
+  "frap": 1,
+  "id": "a38be0aa-d80a-4249-875c-6cff78f8bf83",
+  "name": "Log in",
+  "order": 1,
+  "method": "POST",
+  "url": "{{BASE_URL}}/anything/login",
+  "headers": [
+    {
+      "enabled": true,
+      "key": "User-Agent",
+      "value": "{{USER_AGENT}}"
+    }
+  ],
+  "body": {
+    "mode": "json",
+    "text": "{\n  \"user\": \"{{USER_ID}}\",\n  \"password\": \"hunter2\"\n}"
+  },
+  "scripts": {
+    "postResponse": "// httpbin echoes what we sent, which is enough to demo the flow.\nconst echoed = frap.response.json()\n\nfrap.test('login returned 200', () => {\n  frap.expect(frap.response.status).toBe(200)\n})\n\nfrap.test('the payload came back intact', () => {\n  frap.expect(echoed.json.user).toBe(frap.env.get('USER_ID'))\n})\n\n// Pretend the server handed us a token, and persist it to .env.\n// Every comment in the file survives this write.\nfrap.env.set('TOKEN', 'demo-' + echoed.json.user + '-' + Date.now())\nfrap.console.log('token stored in the active environment')"
+  }
+}

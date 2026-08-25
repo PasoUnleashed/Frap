@@ -1,0 +1,54 @@
+appId: dev.frap.app
+productName: Frap
+copyright: Copyright © 2026 Frap
+directories:
+  buildResources: build
+  output: release
+
+# Only the bundled output ships. Every dependency is compiled into `out/`,
+# so there is no node_modules tree to carry along.
+files:
+  - out/**/*
+  - '!**/*.map'
+  - '!**/*.ts'
+
+asar: true
+compression: maximum
+electronLanguages:
+  - en-US
+
+win:
+  # A single self-contained .exe: no installer, no unpacking step for the user.
+  target:
+    - target: portable
+      arch: [x64]
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.png
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+portable:
+  artifactName: ${productName}-${version}-portable.exe
+  # Keeps the extraction folder stable so the app is not re-unpacked every run.
+  unicode: false
+  requestExecutionLevel: user
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: ${productName}-${version}-setup.exe
+
+linux:
+  target:
+    - AppImage
+  category: Development
+  icon: build/icon.png
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+mac:
+  target:
+    - dmg
+  category: public.app-category.developer-tools
+  icon: build/icon.png
+  artifactName: ${productName}-${version}-${arch}.${ext}

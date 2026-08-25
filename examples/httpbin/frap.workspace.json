@@ -1,0 +1,16 @@
+{
+  "frap": 1,
+  "name": "httpbin example",
+  "environments": [
+    {
+      "name": "local",
+      "file": ".env"
+    }
+  ],
+  "settings": {
+    "timeoutMs": 30000,
+    "followRedirects": true,
+    "maxRedirects": 10,
+    "validateTls": true
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "frap": 1,
+  "id": "0198e817-c736-4b03-83e6-bcb2913c5b43",
+  "name": "Whoami",
+  "order": 2,
+  "method": "GET",
+  "url": "{{BASE_URL}}/bearer",
+  "auth": {
+    "type": "bearer",
+    "token": "{{TOKEN}}"
+  },
+  "scripts": {
+    "postResponse": "frap.test('the token was accepted', () => {\n  frap.expect(frap.response.status).toBe(200)\n})\n\nfrap.test('it is the token we stored', () => {\n  const body = frap.response.json()\n  frap.expect(body.token).toBe(frap.env.get('TOKEN'))\n})"
+  },
+  "docs": "Run \"Log in\" first - it writes TOKEN into .env, which this request reads."
+}

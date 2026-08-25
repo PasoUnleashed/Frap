@@ -1,0 +1,13 @@
+{
+  "frap": 1,
+  "id": "6d178a51-69ca-4f48-8e8f-7e02e03d21c9",
+  "name": "Status codes",
+  "order": 3,
+  "method": "GET",
+  "url": "{{BASE_URL}}/status/{{CODE}}",
+  "scripts": {
+    "preRequest": "// Session variables live in memory only - never written to disk.\nfrap.vars.set('CODE', frap.vars.get('CODE') === '404' ? '200' : '404')\nfrap.console.log('asking for', frap.vars.get('CODE'))",
+    "postResponse": "frap.test('got the status we asked for', () => {\n  frap.expect(String(frap.response.status)).toBe(frap.vars.get('CODE'))\n})"
+  },
+  "docs": "Alternates between 200 and 404 on each send, to show session variables."
+}
