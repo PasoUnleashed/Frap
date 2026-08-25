@@ -8,12 +8,7 @@ export function Welcome(): JSX.Element {
     <div className="welcome">
       <div className="welcome-inner">
         <h1>Frap</h1>
-        <p className="tagline">
-          An API client whose collections are just files.
-          <br />
-          One JSON file per request, environments as <code className="mono">.env</code> files —
-          commit them, branch them, merge them like the rest of your code.
-        </p>
+        <p className="tagline">A lightweight, git compatible API client.</p>
 
         <div className="row" style={{ justifyContent: 'center' }}>
           <button className="primary" onClick={() => void actions.pickAndOpen()}>
@@ -29,7 +24,7 @@ export function Welcome(): JSX.Element {
                 className="item"
                 onClick={() => void actions.open(entry.root)}
               >
-                <span>{entry.name}</span>
+                <span className="n">{entry.name}</span>
                 <span className="spacer" />
                 <span className="p" title={entry.root}>
                   {entry.root}

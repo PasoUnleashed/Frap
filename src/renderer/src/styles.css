@@ -1481,13 +1481,24 @@ textarea.curl-input {
 .welcome .recent .item:hover {
   background: var(--panel-2);
 }
+/* The name is the identity: it never wraps and never gives up room. */
+.welcome .recent .item .n {
+  flex: none;
+  white-space: nowrap;
+}
 .welcome .recent .item .p {
   font-family: var(--mono);
   font-size: 11px;
   color: var(--text-faint);
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* Truncate from the left, so the folder you are looking for stays visible
+     rather than a run of identical parent directories. */
+  direction: rtl;
+  text-align: right;
 }
 
 /* ---------------------------------------------------------------- */
