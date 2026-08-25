@@ -19,6 +19,8 @@ async function createWindow(): Promise<void> {
   const state = await loadState()
   const bounds = state.windowBounds
 
+  const isMac = process.platform === 'darwin'
+
   mainWindow = new BrowserWindow({
     width: bounds?.width ?? 1440,
     height: bounds?.height ?? 900,
@@ -28,8 +30,12 @@ async function createWindow(): Promise<void> {
     minHeight: 560,
     show: false,
     backgroundColor: '#111318',
-    autoHideMenuBar: true,
-    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    // The app draws its own title bar, so the toolbar doubles as the drag
+    // handle and there is no second, redundant row of window buttons.
+    // macOS keeps its traffic lights, inset into our bar.
+    frame: isMac,
+    titleBarStyle: isMac ? 'hiddenInset' : 'default',
+    trafficLightPosition: isMac ? { x: 14, y: 12 } : undefined,
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -39,15 +45,29 @@ async function createWindow(): Promise<void> {
     }
   })
 
+  if (state.windowMaximized) mainWindow.maximize()
   mainWindow.once('ready-to-show', () => mainWindow?.show())
 
   const persistBounds = (): void => {
     if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isMinimized()) return
+    // Only remember the restored size, so un-maximising lands somewhere sane.
+    if (mainWindow.isMaximized()) return
     const { width, height, x, y } = mainWindow.getBounds()
     void saveState({ windowBounds: { width, height, x, y } })
   }
   mainWindow.on('resized', persistBounds)
   mainWindow.on('moved', persistBounds)
+
+  // The custom title bar mirrors the real window state.
+  const reportMaximized = (): void => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    const maximized = mainWindow.isMaximized()
+    void saveState({ windowMaximized: maximized })
+    mainWindow.webContents.send('window:maximized', maximized)
+  }
+  mainWindow.on('maximize', reportMaximized)
+  mainWindow.on('unmaximize', reportMaximized)
+
   mainWindow.on('closed', () => {
     mainWindow = null
   })
@@ -84,6 +104,11 @@ function buildMenu(): void {
           { label: 'Open Workspace...', accelerator: 'CmdOrCtrl+O', click: () => send('menu:openWorkspace') },
           { label: 'New Request', accelerator: 'CmdOrCtrl+N', click: () => send('menu:newRequest') },
           { label: 'New Folder', accelerator: 'CmdOrCtrl+Shift+N', click: () => send('menu:newFolder') },
+          {
+            label: 'Import from cURL...',
+            accelerator: 'CmdOrCtrl+I',
+            click: () => send('menu:importCurl')
+          },
           { type: 'separator' },
           { label: 'Save', accelerator: 'CmdOrCtrl+S', click: () => send('menu:save') },
           { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => send('menu:closeTab') },
@@ -98,6 +123,11 @@ function buildMenu(): void {
           { label: 'Send', accelerator: 'CmdOrCtrl+Return', click: () => send('menu:send') },
           { label: 'Cancel', accelerator: 'CmdOrCtrl+.', click: () => send('menu:cancel') },
           { type: 'separator' },
+          {
+            label: 'Copy as cURL',
+            accelerator: 'CmdOrCtrl+Shift+C',
+            click: () => send('menu:copyCurl')
+          },
           { label: 'Focus URL', accelerator: 'CmdOrCtrl+L', click: () => send('menu:focusUrl') }
         ]
       },
@@ -105,6 +135,7 @@ function buildMenu(): void {
         label: '&View',
         submenu: [
           { label: 'Environments', accelerator: 'CmdOrCtrl+E', click: () => send('menu:environments') },
+          { label: 'History', accelerator: 'CmdOrCtrl+H', click: () => send('menu:history') },
           { label: 'Refresh from Disk', accelerator: 'CmdOrCtrl+R', click: () => send('menu:refresh') },
           { type: 'separator' },
           { role: 'resetZoom' },
@@ -112,7 +143,7 @@ function buildMenu(): void {
           { role: 'zoomOut' },
           { type: 'separator' },
           { role: 'togglefullscreen' },
-          { role: 'toggleDevTools' }
+          { role: 'toggleDevTools', accelerator: 'F12' }
         ]
       },
       {

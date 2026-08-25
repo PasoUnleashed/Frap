@@ -22,15 +22,19 @@ async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
 /** Channels main may push to the renderer. Nothing else is forwarded. */
 const EVENTS = [
   'workspace:changed',
+  'window:maximized',
   'menu:openWorkspace',
   'menu:newRequest',
   'menu:newFolder',
+  'menu:importCurl',
+  'menu:copyCurl',
   'menu:save',
   'menu:closeTab',
   'menu:send',
   'menu:cancel',
   'menu:focusUrl',
   'menu:environments',
+  'menu:history',
   'menu:refresh',
   'menu:scriptingHelp'
 ] as const
@@ -55,7 +59,38 @@ const api = {
     read: (absPath: string) => call<unknown>('request:read', absPath),
     save: (absPath: string, req: unknown) => call<boolean>('request:save', absPath, req),
     create: (parentDir: string, name?: string) => call<string>('request:create', parentDir, name),
-    duplicate: (absPath: string) => call<string>('request:duplicate', absPath)
+    duplicate: (absPath: string) => call<string>('request:duplicate', absPath),
+    toCurl: (absPath: string, req?: unknown) =>
+      call<{ command: string; missing: string[] }>('request:toCurl', absPath, req)
+  },
+  curl: {
+    parse: (text: string, substitute: boolean) =>
+      call<{ request: unknown; warnings: string[] }>('curl:parse', text, substitute),
+    import: (parentDir: string, text: string, substitute: boolean, name?: string) =>
+      call<{ path: string; warnings: string[] }>('curl:import', parentDir, text, substitute, name)
+  },
+  history: {
+    list: () => call<unknown[]>('history:list'),
+    clear: () => call<boolean>('history:clear')
+  },
+  layout: {
+    get: () => call<{ sidebarWidth: number; responseHeight: number }>('layout:get'),
+    set: (patch: { sidebarWidth?: number; responseHeight?: number }) =>
+      call<{ sidebarWidth: number; responseHeight: number }>('layout:set', patch)
+  },
+  menu: {
+    context: (items: unknown[]) => call<string | null>('menu:context', items),
+    app: () => call<boolean>('menu:app')
+  },
+  window: {
+    minimize: () => call<boolean>('window:minimize'),
+    toggleMaximize: () => call<boolean>('window:toggleMaximize'),
+    close: () => call<boolean>('window:close'),
+    isMaximized: () => call<boolean>('window:isMaximized')
+  },
+  clipboard: {
+    write: (text: string) => call<boolean>('clipboard:write', text),
+    read: () => call<string>('clipboard:read')
   },
   nodes: {
     createFolder: (parentDir: string, name?: string) => call<string>('folder:create', parentDir, name),

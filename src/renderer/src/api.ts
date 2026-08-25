@@ -6,6 +6,7 @@ import type {
   EnvFileView,
   ExecResult,
   FrapRequest,
+  HistoryEntry,
   TreeNode,
   WorkspaceConfig
 } from '@shared/types'
@@ -14,6 +15,22 @@ export interface WorkspaceState {
   activeEnvironment: string | null
   openTabs: string[]
   activeTab: string | null
+  collapsedFolders: string[]
+  history: HistoryEntry[]
+}
+
+export interface LayoutState {
+  sidebarWidth: number
+  responseHeight: number
+}
+
+/** A native context-menu template. `type: 'separator'` draws a divider. */
+export interface MenuItem {
+  id?: string
+  label?: string
+  type?: 'separator'
+  enabled?: boolean
+  accelerator?: string
 }
 
 export interface OpenedWorkspace {
@@ -47,6 +64,25 @@ export const api = {
   saveRequest: (absPath: string, req: FrapRequest) => bridge.requests.save(absPath, req),
   createRequest: (parentDir: string, name?: string) => bridge.requests.create(parentDir, name),
   duplicateRequest: (absPath: string) => bridge.requests.duplicate(absPath),
+
+  /** Copies the request to the clipboard as a runnable cURL command. */
+  toCurl: (absPath: string, req?: FrapRequest) => bridge.requests.toCurl(absPath, req),
+  parseCurl: (text: string, substitute: boolean) =>
+    bridge.curl.parse(text, substitute) as Promise<{ request: FrapRequest; warnings: string[] }>,
+  importCurl: (parentDir: string, text: string, substitute: boolean, name?: string) =>
+    bridge.curl.import(parentDir, text, substitute, name),
+
+  listHistory: () => bridge.history.list() as Promise<HistoryEntry[]>,
+  clearHistory: () => bridge.history.clear(),
+
+  getLayout: () => bridge.layout.get(),
+  setLayout: (patch: Partial<LayoutState>) => bridge.layout.set(patch),
+
+  contextMenu: (items: MenuItem[]) => bridge.menu.context(items),
+  appMenu: () => bridge.menu.app(),
+
+  window: bridge.window,
+  clipboard: bridge.clipboard,
 
   createFolder: (parentDir: string, name?: string) => bridge.nodes.createFolder(parentDir, name),
   rename: (absPath: string, name: string) => bridge.nodes.rename(absPath, name),

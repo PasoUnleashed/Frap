@@ -20,13 +20,15 @@ import type {
   EnvFileView,
   ExecResult,
   FrapRequest,
+  HistoryEntry,
   TreeNode,
   WorkspaceConfig
 } from '@shared/types'
-import { api } from './api'
+import { api, type LayoutState } from './api'
 
 export type RequestTab = 'params' | 'headers' | 'body' | 'auth' | 'pre' | 'post' | 'docs'
 export type ResponseTab = 'body' | 'headers' | 'tests' | 'console' | 'sent'
+export type SidebarView = 'tree' | 'history'
 
 export interface TabState {
   path: string
@@ -59,6 +61,13 @@ export interface State {
   showEnvs: boolean
   showHelp: boolean
   showSettings: boolean
+  /** Folder the import dialog will drop the new request into; null = closed. */
+  importCurlInto: string | null
+  sidebarView: SidebarView
+  history: HistoryEntry[]
+  layout: LayoutState
+  /** Folders the user collapsed, keyed by absolute path. */
+  collapsed: Record<string, boolean>
   toasts: Toast[]
   /** Set when the watcher sees changes we have not pulled in yet. */
   diskChanged: boolean
@@ -77,6 +86,11 @@ const initialState: State = {
   showEnvs: false,
   showHelp: false,
   showSettings: false,
+  importCurlInto: null,
+  sidebarView: 'tree',
+  history: [],
+  layout: { sidebarWidth: 280, responseHeight: 45 },
+  collapsed: {},
   toasts: [],
   diskChanged: false
 }
@@ -102,6 +116,11 @@ type Action =
   | { type: 'patchRequest'; path: string; patch: Partial<FrapRequest> }
   | { type: 'retitleTab'; from: string; to: string; name: string }
   | { type: 'toggle'; key: 'showEnvs' | 'showHelp' | 'showSettings'; value?: boolean }
+  | { type: 'importCurlInto'; dir: string | null }
+  | { type: 'sidebarView'; view: SidebarView }
+  | { type: 'history'; history: HistoryEntry[] }
+  | { type: 'layout'; layout: LayoutState }
+  | { type: 'collapsed'; collapsed: Record<string, boolean> }
   | { type: 'toast'; toast: Toast }
   | { type: 'dismissToast'; id: number }
   | { type: 'diskChanged'; value: boolean }
@@ -182,6 +201,16 @@ function reducer(state: State, action: Action): State {
       return { ...state, toasts: [...state.toasts, action.toast].slice(-4) }
     case 'dismissToast':
       return { ...state, toasts: state.toasts.filter((t) => t.id !== action.id) }
+    case 'importCurlInto':
+      return { ...state, importCurlInto: action.dir }
+    case 'sidebarView':
+      return { ...state, sidebarView: action.view }
+    case 'history':
+      return { ...state, history: action.history }
+    case 'layout':
+      return { ...state, layout: action.layout }
+    case 'collapsed':
+      return { ...state, collapsed: action.collapsed }
     case 'diskChanged':
       return { ...state, diskChanged: action.value }
     default:
@@ -217,6 +246,19 @@ export interface Actions {
   toast(kind: Toast['kind'], message: string): void
   dismissToast(id: number): void
   dismissDiskChanged(): void
+
+  /** Copies a request to the clipboard as a cURL command. */
+  copyCurl(path: string): Promise<void>
+  /** Opens the import dialog, targeting `dir`; pass null to close it. */
+  openImportCurl(dir: string | null): void
+  importCurl(dir: string, text: string, substitute: boolean, name?: string): Promise<void>
+
+  setSidebarView(view: SidebarView): void
+  refreshHistory(): Promise<void>
+  clearHistory(): Promise<void>
+
+  setLayout(patch: Partial<LayoutState>): void
+  toggleFolder(path: string): void
 }
 
 const StoreContext = createContext<{ state: State; actions: Actions } | null>(null)
@@ -283,16 +325,32 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
       const { recent } = await api.recentWorkspaces()
       dispatch({ type: 'recent', recent })
 
+      dispatch({
+        type: 'collapsed',
+        collapsed: Object.fromEntries((opened.state.collapsedFolders ?? []).map((p) => [p, true]))
+      })
+      void loadHistory()
+
       // Reopen whatever was open last time, skipping files that have gone.
       for (const path of opened.state.openTabs ?? []) {
         await openTabInternal(path, false)
       }
       if (opened.state.activeTab) dispatch({ type: 'activeTab', path: opened.state.activeTab })
     },
-    // openTabInternal is stable via the ref below.
+    // openTabInternal and loadHistory are declared below but only called
+    // after render, so their bindings are initialised by then.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [guard]
   )
+
+  const loadHistory = useCallback(async () => {
+    if (!ref.current.root) return
+    try {
+      dispatch({ type: 'history', history: await api.listHistory() })
+    } catch {
+      // History is a convenience; a failure here is not worth a toast.
+    }
+  }, [])
 
   const persistTabs = useCallback(() => {
     if (!ref.current.root) return
@@ -389,6 +447,7 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
               resTab: result.tests.length ? 'tests' : 'body'
             }
           })
+          void loadHistory()
           // A script may have rewritten the .env file, so pull it back in.
           if (result.envWrites.length) {
             const environments = await api.listEnvs()
@@ -502,16 +561,81 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
       },
       dismissDiskChanged() {
         dispatch({ type: 'diskChanged', value: false })
+      },
+
+      async copyCurl(path) {
+        // Send the in-editor version so unsaved edits are reflected.
+        const tab = ref.current.tabs.find((t) => t.path === path)
+        const result = await guard(() => api.toCurl(path, tab?.request))
+        if (!result) return
+        if (result.missing.length) {
+          toast(
+            'info',
+            `Copied. ${result.missing.map((n) => `{{${n}}}`).join(', ')} had no value in this environment.`
+          )
+        } else {
+          toast('success', 'cURL command copied')
+        }
+      },
+
+      openImportCurl(dir) {
+        dispatch({ type: 'importCurlInto', dir })
+      },
+
+      async importCurl(dir, text, substitute, name) {
+        const result = await guard(() => api.importCurl(dir, text, substitute, name))
+        if (!result) return
+        dispatch({ type: 'importCurlInto', dir: null })
+        await refresh()
+        await openTabInternal(result.path)
+        setTimeout(persistTabs, 0)
+        for (const warning of result.warnings) toast('info', warning)
+        toast('success', 'Imported from cURL')
+      },
+
+      setSidebarView(view) {
+        dispatch({ type: 'sidebarView', view })
+        if (view === 'history') void loadHistory()
+      },
+
+      refreshHistory: loadHistory,
+
+      async clearHistory() {
+        await guard(() => api.clearHistory())
+        dispatch({ type: 'history', history: [] })
+      },
+
+      setLayout(patch) {
+        const layout = { ...ref.current.layout, ...patch }
+        dispatch({ type: 'layout', layout })
+        // Persisted per machine, so pane sizes survive a restart.
+        void api.setLayout(patch)
+      },
+
+      toggleFolder(path) {
+        const collapsed = { ...ref.current.collapsed, [path]: !ref.current.collapsed[path] }
+        dispatch({ type: 'collapsed', collapsed })
+        if (ref.current.root) {
+          void api.setState({
+            collapsedFolders: Object.entries(collapsed)
+              .filter(([, isCollapsed]) => isCollapsed)
+              .map(([folder]) => folder)
+          })
+        }
       }
     }),
-    [guard, open, openTabInternal, persistTabs, refresh, toast]
+    [guard, loadHistory, open, openTabInternal, persistTabs, refresh, toast]
   )
 
   // Boot: reopen the most recent workspace.
   useEffect(() => {
     void (async () => {
-      const { recent, last } = await api.recentWorkspaces()
+      const [{ recent, last }, layout] = await Promise.all([
+        api.recentWorkspaces(),
+        api.getLayout()
+      ])
       dispatch({ type: 'recent', recent })
+      dispatch({ type: 'layout', layout })
       if (last && recent.includes(last)) await open(last)
       else dispatch({ type: 'loading', value: false })
     })()

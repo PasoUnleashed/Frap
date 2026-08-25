@@ -2,20 +2,32 @@
  * Every renderer -> main entry point. The renderer has no filesystem or
  * network access of its own; it asks for things here.
  */
-import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { BrowserWindow, Menu, clipboard, dialog, ipcMain, shell, type MenuItemConstructorOptions } from 'electron'
 import { promises as fs, watch, type FSWatcher } from 'node:fs'
 import * as path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import type {
-  EnvFileView,
-  ExecResult,
-  FrapRequest,
-  TreeNode,
-  Workspace,
-  WorkspaceConfig
+import {
+  REQUEST_EXT,
+  type EnvFileView,
+  type ExecResult,
+  type FrapRequest,
+  type HistoryEntry,
+  type TreeNode,
+  type Workspace,
+  type WorkspaceConfig
 } from '../shared/types.ts'
-import { entryViews, readEnvDoc, setEnvValue, unsetEnvValue, writeEnvDoc } from './dotenv.ts'
+import {
+  entryViews,
+  envToObject,
+  expandEnv,
+  readEnvDoc,
+  setEnvValue,
+  unsetEnvValue,
+  writeEnvDoc
+} from './dotenv.ts'
 import { execute } from './execute.ts'
+import { parseCurl, toCurl } from './curl.ts'
+import { toMutable } from './prepare.ts'
 import {
   createFolder,
   createRequest,
@@ -26,12 +38,33 @@ import {
   readRequest,
   renameNode,
   reorder,
+  sanitizeName,
   scanTree,
+  serializeRequest,
   writeConfig,
   writeRequest,
   assertInside
 } from './workspace.ts'
-import { forgetWorkspace, getWorkspaceState, loadState, rememberWorkspace, setWorkspaceState } from './state.ts'
+import {
+  clearHistory,
+  forgetWorkspace,
+  getWorkspaceState,
+  loadState,
+  pushHistory,
+  rememberWorkspace,
+  setLayout,
+  setWorkspaceState,
+  type LayoutState
+} from './state.ts'
+
+/** One entry in a context menu template sent up from the renderer. */
+export interface ContextMenuItem {
+  id?: string
+  label?: string
+  type?: 'separator'
+  enabled?: boolean
+  accelerator?: string
+}
 
 /** Session variables live for as long as the app runs, keyed by workspace. */
 const sessionVars = new Map<string, Map<string, string>>()
@@ -66,6 +99,22 @@ async function activeEnvPath(): Promise<string | null> {
   if (!state.activeEnvironment) return null
   const env = config.environments.find((e) => e.name === state.activeEnvironment)
   return env ? envAbsPath(root, env.file) : null
+}
+
+/**
+ * The variables a request would resolve against right now: the active .env
+ * file, overlaid with anything scripts have set this session.
+ */
+async function activeScope(): Promise<Record<string, string>> {
+  const { root } = requireWorkspace()
+  const envPath = await activeEnvPath()
+  let scope: Record<string, string> = {}
+  if (envPath) {
+    const { doc } = await readEnvDoc(envPath)
+    scope = expandEnv(envToObject(doc))
+  }
+  for (const [key, value] of varsFor(root)) scope[key] = value
+  return scope
 }
 
 /* ------------------------------------------------------------------ */
@@ -240,6 +289,61 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     return duplicateRequest(root, absPath)
   })
 
+  /* -- cURL ---------------------------------------------------------- */
+
+  /**
+   * Renders the request as it would actually be sent, with every variable
+   * already resolved, and puts it on the clipboard.
+   */
+  handle('request:toCurl', async (absPath: string, req?: FrapRequest) => {
+    const { root, config } = requireWorkspace()
+    assertInside(root, absPath)
+    // Prefer the in-editor version so unsaved edits are included.
+    const request = req
+      ? normalizeRequest(req, path.basename(absPath))
+      : await readRequest(absPath)
+    const scope = await activeScope()
+    const missing = new Set<string>()
+    const mutable = toMutable(request, { root, scope, missing })
+    const command = toCurl(request, mutable, {
+      followRedirects: request.settings?.followRedirects ?? config.settings.followRedirects,
+      validateTls: request.settings?.validateTls ?? config.settings.validateTls
+    })
+    clipboard.writeText(command)
+    return { command, missing: [...missing] }
+  })
+
+  /** Parses without writing anything, so the import dialog can preview it. */
+  handle('curl:parse', async (text: string, substitute: boolean) => {
+    const scope = await activeScope()
+    const { request, warnings } = parseCurl(text, scope, substitute)
+    return { request, warnings }
+  })
+
+  handle('curl:import', async (parentDir: string, text: string, substitute: boolean, name?: string) => {
+    const { root } = requireWorkspace()
+    const target = parentDir || root
+    assertInside(root, target)
+
+    const scope = await activeScope()
+    const { request, warnings } = parseCurl(text, scope, substitute)
+    if (name?.trim()) request.name = name.trim()
+
+    await fs.mkdir(target, { recursive: true })
+    const base = sanitizeName(request.name)
+    let file = path.join(target, base + REQUEST_EXT)
+    for (let n = 2; ; n++) {
+      if (!(await fs.stat(file).catch(() => null))) break
+      file = path.join(target, `${base} ${n}${REQUEST_EXT}`)
+    }
+
+    const siblings = await scanTree(root, target)
+    request.name = path.basename(file).slice(0, -REQUEST_EXT.length)
+    request.order = siblings.reduce((m, n) => Math.max(m, n.order), 0) + 1
+    await fs.writeFile(file, serializeRequest(request), 'utf8')
+    return { path: file, warnings }
+  })
+
   handle('folder:create', async (parentDir: string, name?: string) => {
     const { root } = requireWorkspace()
     return createFolder(root, parentDir || root, name)
@@ -364,19 +468,53 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     const controller = new AbortController()
     inflight.set(runId, controller)
     try {
+      const request = normalizeRequest(req, path.basename(absPath))
       const result = await execute({
         root,
-        request: normalizeRequest(req, path.basename(absPath)),
+        request,
         envPath: await activeEnvPath(),
         settings: config.settings,
         vars: varsFor(root),
         signal: controller.signal
       })
+      if (!result.skipped) {
+        const entry: HistoryEntry = {
+          id: runId,
+          at: Date.now(),
+          requestId: request.id,
+          name: request.name,
+          method: result.sent?.method ?? request.method,
+          url: result.sent?.url ?? request.url,
+          ...(result.response
+            ? { status: result.response.status, timeMs: result.response.timings.totalMs }
+            : {}),
+          ...(result.error ? { error: result.error } : {})
+        }
+        // History is a convenience, never a reason to fail a send.
+        await pushHistory(root, entry).catch(() => undefined)
+      }
       return { ...result, runId }
     } finally {
       inflight.delete(runId)
     }
   })
+
+  /* -- history and layout -------------------------------------------- */
+
+  handle('history:list', async (): Promise<HistoryEntry[]> => {
+    const { root } = requireWorkspace()
+    return (await getWorkspaceState(root)).history
+  })
+
+  handle('history:clear', async () => {
+    const { root } = requireWorkspace()
+    await clearHistory(root)
+    return true
+  })
+
+  handle('layout:get', async (): Promise<LayoutState> => (await loadState()).layout)
+
+  handle('layout:set', (patch: Partial<LayoutState>) => setLayout(patch))
 
   handle('exec:cancel', (runId: string) => {
     inflight.get(runId)?.abort()
@@ -399,7 +537,73 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     return true
   })
 
+  /* -- native menus --------------------------------------------------- */
+
+  /**
+   * Pops up a real OS context menu from a template the renderer supplies and
+   * resolves with the id that was clicked (or null if it was dismissed).
+   */
+  handle('menu:context', (items: ContextMenuItem[]) => {
+    const window = getWindow()
+    if (!window) return null
+    return new Promise<string | null>((resolve) => {
+      let picked: string | null = null
+      const template: MenuItemConstructorOptions[] = items.map((item) =>
+        item.type === 'separator'
+          ? { type: 'separator' }
+          : {
+              label: item.label,
+              enabled: item.enabled !== false,
+              accelerator: item.accelerator,
+              click: () => {
+                picked = item.id ?? null
+              }
+            }
+      )
+      const menu = Menu.buildFromTemplate(template)
+      // `closed` fires after `click`, so the id is already set by then.
+      menu.popup({ window, callback: () => resolve(picked) })
+    })
+  })
+
+  /** Opens the application menu from the custom title bar's button. */
+  handle('menu:app', () => {
+    const window = getWindow()
+    const menu = Menu.getApplicationMenu()
+    if (window && menu) menu.popup({ window, x: 8, y: 36 })
+    return true
+  })
+
+  /* -- window controls ------------------------------------------------ */
+
+  handle('window:minimize', () => {
+    getWindow()?.minimize()
+    return true
+  })
+
+  handle('window:toggleMaximize', () => {
+    const window = getWindow()
+    if (!window) return false
+    if (window.isMaximized()) window.unmaximize()
+    else window.maximize()
+    return window.isMaximized()
+  })
+
+  handle('window:close', () => {
+    getWindow()?.close()
+    return true
+  })
+
+  handle('window:isMaximized', () => getWindow()?.isMaximized() ?? false)
+
   /* -- misc ---------------------------------------------------------- */
+
+  handle('clipboard:write', (text: string) => {
+    clipboard.writeText(text)
+    return true
+  })
+
+  handle('clipboard:read', () => clipboard.readText())
 
   handle('shell:openExternal', async (url: string) => {
     if (!/^https?:\/\//i.test(url)) throw new Error('Only http(s) links can be opened')

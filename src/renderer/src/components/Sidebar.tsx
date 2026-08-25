@@ -1,9 +1,10 @@
-import { useMemo, useState, type DragEvent, type JSX } from 'react'
+import { useMemo, useState, type DragEvent, type JSX, type MouseEvent } from 'react'
 import type { TreeNode } from '@shared/types'
+import { api, type MenuItem } from '../api'
 import { isDirty, useStore } from '../store'
+import { HistoryList } from './HistoryList'
 
-/** Folder open/closed state lives here; it is UI-only and not persisted. */
-type Expanded = Record<string, boolean>
+const SEPARATOR: MenuItem = { type: 'separator' }
 
 function matches(node: TreeNode, needle: string): boolean {
   if (node.name.toLowerCase().includes(needle)) return true
@@ -13,22 +14,12 @@ function matches(node: TreeNode, needle: string): boolean {
 interface RowProps {
   node: TreeNode
   depth: number
-  expanded: Expanded
-  toggle: (path: string) => void
   filter: string
   dragOver: string | null
   setDragOver: (path: string | null) => void
 }
 
-function Row({
-  node,
-  depth,
-  expanded,
-  toggle,
-  filter,
-  dragOver,
-  setDragOver
-}: RowProps): JSX.Element | null {
+function Row({ node, depth, filter, dragOver, setDragOver }: RowProps): JSX.Element | null {
   const { state, actions } = useStore()
   const [renaming, setRenaming] = useState(false)
 
@@ -36,7 +27,7 @@ function Row({
 
   const isFolder = node.kind === 'folder'
   // A filtered search reveals everything that matched.
-  const open = filter ? true : (expanded[node.path] ?? depth === 0)
+  const open = filter ? true : !state.collapsed[node.path]
   const active = state.activeTab === node.path
   const tab = state.tabs.find((t) => t.path === node.path)
   const unsaved = tab ? isDirty(tab) : false
@@ -47,9 +38,7 @@ function Row({
   }
 
   const onDragOver = (event: DragEvent): void => {
-    if (!isFolder) return
-    const source = event.dataTransfer.types.includes('text/frap-path')
-    if (!source) return
+    if (!isFolder || !event.dataTransfer.types.includes('text/frap-path')) return
     event.preventDefault()
     event.dataTransfer.dropEffect = 'move'
     setDragOver(node.path)
@@ -69,6 +58,73 @@ function Row({
     if (next && next !== node.name) void actions.rename(node.path, next)
   }
 
+  const onContextMenu = async (event: MouseEvent): Promise<void> => {
+    event.preventDefault()
+    event.stopPropagation()
+
+    const items: MenuItem[] = isFolder
+      ? [
+          { id: 'new-request', label: 'New Request' },
+          { id: 'new-folder', label: 'New Folder' },
+          { id: 'import-curl', label: 'Import from cURL...', accelerator: 'CmdOrCtrl+I' },
+          SEPARATOR,
+          { id: 'rename', label: 'Rename' },
+          { id: 'reveal', label: 'Show in File Manager' },
+          SEPARATOR,
+          { id: 'delete', label: 'Move to Trash' }
+        ]
+      : [
+          { id: 'open', label: 'Open' },
+          SEPARATOR,
+          { id: 'copy-curl', label: 'Copy as cURL', accelerator: 'CmdOrCtrl+Shift+C' },
+          { id: 'copy-path', label: 'Copy File Path' },
+          SEPARATOR,
+          { id: 'rename', label: 'Rename' },
+          { id: 'duplicate', label: 'Duplicate' },
+          { id: 'reveal', label: 'Show in File Manager' },
+          SEPARATOR,
+          { id: 'delete', label: 'Move to Trash' }
+        ]
+
+    const parentDir = isFolder ? node.path : node.path.replace(/[\\/][^\\/]+$/, '')
+
+    switch (await api.contextMenu(items)) {
+      case 'open':
+        void actions.openTab(node.path)
+        break
+      case 'new-request':
+        void actions.createRequest(node.path)
+        break
+      case 'new-folder':
+        void actions.createFolder(node.path)
+        break
+      case 'import-curl':
+        actions.openImportCurl(parentDir)
+        break
+      case 'copy-curl':
+        void actions.copyCurl(node.path)
+        break
+      case 'copy-path':
+        void api.clipboard.write(node.path)
+        actions.toast('success', 'Path copied')
+        break
+      case 'rename':
+        setRenaming(true)
+        break
+      case 'duplicate':
+        void actions.duplicate(node.path)
+        break
+      case 'reveal':
+        void api.reveal(node.path)
+        break
+      case 'delete':
+        void actions.remove(node.path, node.name)
+        break
+      default:
+        break
+    }
+  }
+
   return (
     <>
       <div
@@ -79,8 +135,9 @@ function Row({
         onDragOver={onDragOver}
         onDragLeave={() => dragOver === node.path && setDragOver(null)}
         onDrop={onDrop}
-        onClick={() => (isFolder ? toggle(node.path) : void actions.openTab(node.path))}
+        onClick={() => (isFolder ? actions.toggleFolder(node.path) : void actions.openTab(node.path))}
         onDoubleClick={() => setRenaming(true)}
+        onContextMenu={(e) => void onContextMenu(e)}
         title={node.relPath}
       >
         <span className="caret">{isFolder ? (open ? '▼' : '▶') : ''}</span>
@@ -107,7 +164,7 @@ function Row({
         )}
 
         <span className="actions" onClick={(e) => e.stopPropagation()}>
-          {isFolder && (
+          {isFolder ? (
             <>
               <button
                 className="ghost"
@@ -124,23 +181,15 @@ function Row({
                 ⊞
               </button>
             </>
-          )}
-          {!isFolder && (
+          ) : (
             <button
               className="ghost"
-              title="Duplicate"
-              onClick={() => void actions.duplicate(node.path)}
+              title="Copy as cURL"
+              onClick={() => void actions.copyCurl(node.path)}
             >
-              ⧉
+              ⌘
             </button>
           )}
-          <button
-            className="ghost danger"
-            title="Move to trash"
-            onClick={() => void actions.remove(node.path, node.name)}
-          >
-            ×
-          </button>
         </span>
       </div>
 
@@ -151,8 +200,6 @@ function Row({
             key={child.path}
             node={child}
             depth={depth + 1}
-            expanded={expanded}
-            toggle={toggle}
             filter={filter}
             dragOver={dragOver}
             setDragOver={setDragOver}
@@ -164,12 +211,8 @@ function Row({
 
 export function Sidebar(): JSX.Element {
   const { state, actions } = useStore()
-  const [expanded, setExpanded] = useState<Expanded>({})
   const [filter, setFilter] = useState('')
   const [dragOver, setDragOver] = useState<string | null>(null)
-
-  const toggle = (path: string): void =>
-    setExpanded((prev) => ({ ...prev, [path]: !(prev[path] ?? true) }))
 
   const counts = useMemo(() => {
     let requests = 0
@@ -193,74 +236,148 @@ export function Sidebar(): JSX.Element {
     if (source && state.root) void actions.move(source, state.root)
   }
 
+  /** Right-clicking empty space targets the workspace root. */
+  const onRootContextMenu = async (event: MouseEvent): Promise<void> => {
+    event.preventDefault()
+    if (!state.root) return
+    const choice = await api.contextMenu([
+      { id: 'new-request', label: 'New Request', accelerator: 'CmdOrCtrl+N' },
+      { id: 'new-folder', label: 'New Folder', accelerator: 'CmdOrCtrl+Shift+N' },
+      { id: 'import-curl', label: 'Import from cURL...', accelerator: 'CmdOrCtrl+I' },
+      SEPARATOR,
+      { id: 'refresh', label: 'Reload from Disk', accelerator: 'CmdOrCtrl+R' },
+      { id: 'reveal', label: 'Show in File Manager' }
+    ])
+    switch (choice) {
+      case 'new-request':
+        void actions.createRequest(state.root)
+        break
+      case 'new-folder':
+        void actions.createFolder(state.root)
+        break
+      case 'import-curl':
+        actions.openImportCurl(state.root)
+        break
+      case 'refresh':
+        void actions.refresh()
+        break
+      case 'reveal':
+        void api.reveal(state.root)
+        break
+      default:
+        break
+    }
+  }
+
+  const showingTree = state.sidebarView === 'tree'
+
   return (
     <aside className="sidebar">
-      <div className="sidebar-head">
-        <input
-          type="search"
-          placeholder="Filter requests"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-        />
+      <div className="sidebar-tabs">
         <button
-          title="New request"
-          onClick={() => state.root && void actions.createRequest(state.root)}
+          className={showingTree ? 'active' : ''}
+          onClick={() => actions.setSidebarView('tree')}
         >
-          +
+          Collection
         </button>
         <button
-          title="New folder"
-          onClick={() => state.root && void actions.createFolder(state.root)}
+          className={showingTree ? '' : 'active'}
+          onClick={() => actions.setSidebarView('history')}
+          title="Everything you have sent in this workspace (Ctrl+H)"
         >
-          ⊞
+          History
+          {state.history.length > 0 && <span className="badge">{state.history.length}</span>}
         </button>
       </div>
 
-      <div
-        className="tree"
-        onDragOver={(e) => {
-          if (e.dataTransfer.types.includes('text/frap-path')) e.preventDefault()
-        }}
-        onDrop={onRootDrop}
-      >
-        {state.tree.length === 0 ? (
-          <div className="tree-empty">
-            Nothing here yet.
-            <br />
-            <br />
-            Every request is one <code className="mono">.frap.json</code> file, so this folder is
-            safe to commit.
-          </div>
-        ) : (
-          state.tree.map((node) => (
-            <Row
-              key={node.path}
-              node={node}
-              depth={0}
-              expanded={expanded}
-              toggle={toggle}
-              filter={filter.trim().toLowerCase()}
-              dragOver={dragOver}
-              setDragOver={setDragOver}
+      {showingTree ? (
+        <>
+          <div className="sidebar-head">
+            <input
+              type="search"
+              placeholder="Filter requests"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
             />
-          ))
-        )}
-      </div>
+            <button
+              title="New request"
+              onClick={() => state.root && void actions.createRequest(state.root)}
+            >
+              +
+            </button>
+            <button
+              title="Import from cURL"
+              onClick={() => state.root && actions.openImportCurl(state.root)}
+            >
+              ⤓
+            </button>
+          </div>
 
-      <div className="sidebar-foot">
-        <span>
-          {counts.requests} request{counts.requests === 1 ? '' : 's'}
-          {counts.folders > 0 && ` · ${counts.folders} folder${counts.folders === 1 ? '' : 's'}`}
-        </span>
-        <span className="spacer" />
-        <button
-          className="ghost"
-          title="Reload from disk"
-          onClick={() => void actions.refresh()}
-        >
-          ⟳
-        </button>
-      </div>
+          <div
+            className="tree"
+            onDragOver={(e) => {
+              if (e.dataTransfer.types.includes('text/frap-path')) e.preventDefault()
+            }}
+            onDrop={onRootDrop}
+            onContextMenu={(e) => void onRootContextMenu(e)}
+          >
+            {state.tree.length === 0 ? (
+              <div className="tree-empty">
+                Nothing here yet.
+                <br />
+                <br />
+                Right-click to add a request or paste one in from cURL. Every request is one{' '}
+                <code className="mono">.frap.json</code> file, so this folder is safe to commit.
+              </div>
+            ) : (
+              state.tree.map((node) => (
+                <Row
+                  key={node.path}
+                  node={node}
+                  depth={0}
+                  filter={filter.trim().toLowerCase()}
+                  dragOver={dragOver}
+                  setDragOver={setDragOver}
+                />
+              ))
+            )}
+          </div>
+
+          <div className="sidebar-foot">
+            <span>
+              {counts.requests} request{counts.requests === 1 ? '' : 's'}
+              {counts.folders > 0 && ` · ${counts.folders} folder${counts.folders === 1 ? '' : 's'}`}
+            </span>
+            <span className="spacer" />
+            <button className="ghost" title="Reload from disk" onClick={() => void actions.refresh()}>
+              ⟳
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="tree">
+            <HistoryList />
+          </div>
+          <div className="sidebar-foot">
+            <span>
+              {state.history.length} sent
+            </span>
+            <span className="spacer" />
+            <button
+              className="ghost"
+              disabled={state.history.length === 0}
+              onClick={() => {
+                if (window.confirm('Clear the send history for this workspace?')) {
+                  void actions.clearHistory()
+                }
+              }}
+            >
+              Clear
+            </button>
+          </div>
+        </>
+      )}
     </aside>
   )
 }

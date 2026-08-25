@@ -135,13 +135,69 @@ Dynamic values, generated per send: `{{$uuid}}` `{{$timestamp}}`
 
 Press **F1** in the app for the same reference.
 
+## cURL, both directions
+
+**Copy as cURL** — right-click any request (or press `Ctrl+Shift+C`) and the
+command lands on your clipboard as multi-line shell, with every
+`{{VARIABLE}}` already resolved against the environment you have selected:
+
+```bash
+curl \
+  --request POST \
+  --url 'https://api.example.com/anything/login' \
+  --header 'User-Agent: Frap example suite' \
+  --header 'Content-Type: application/json' \
+  --data-raw '{
+  "user": "42",
+  "password": "hunter2"
+}' \
+  --location \
+  --compressed
+```
+
+It is the request Frap would actually send, so it is safe to paste into a
+terminal, a ticket or a message to a backend engineer. File-backed bodies stay
+as `@path` references rather than being inlined.
+
+**Import from cURL** — right-click a folder or empty space in the tree (or
+press `Ctrl+I`) and paste. Anything a browser's devtools "Copy as cURL"
+produces works, as do hand-written commands and the `^` / backtick
+continuations from cmd and PowerShell.
+
+Frap understands `-X`, `-H`, `-d`/`--data-raw`/`--data-urlencode`,
+`--json`, `-F`, `-u`, `-G`, `-I`, `-T`, `-b`, `-A`, `-e`, bundled short
+flags like `-sSL`, and glued values like `-XPOST`. It splits the query string
+into editable params, turns `Authorization` headers and `-u` into real auth
+settings, pretty-prints JSON bodies, and reports anything it had to skip rather
+than dropping it silently.
+
+By default it also works backwards from your environment: a value that matches
+an environment variable comes back as `{{THAT_VARIABLE}}`, so a request copied
+out of devtools is immediately portable. Untick the box in the dialog to keep
+the literal values.
+
+## What Frap remembers for you
+
+Per machine, in your app-data folder (or `frap-data` beside the portable exe):
+
+- **Recent workspaces**, and the one to reopen on launch
+- **Send history** per workspace — method, URL, status and timing for
+  everything you have sent, grouped by day in the sidebar's History tab
+  (`Ctrl+H`). Click an entry to jump back to the request it came from.
+- Open tabs and the active tab, restored on the next launch
+- Which folders you collapsed in the tree
+- Sidebar width and the request/response split
+- Window size, position and whether it was maximised
+
+None of it touches the workspace folder, so none of it can show up in a diff.
+
 ## What is and is not committed
 
 | Committed (in the workspace folder) | Machine-local (in app data) |
 |---|---|
 | requests, folders, scripts, docs | which environment is selected |
-| `frap.workspace.json` — name, environment list, timeout, redirect and TLS settings | open tabs and the active tab |
-| your `.env` files, if you choose to | window size and position, recent workspaces |
+| `frap.workspace.json` — name, environment list, timeout, redirect and TLS settings | open tabs, collapsed folders, pane sizes |
+| your `.env` files, if you choose to | send history, recent workspaces, window state |
 
 Selecting an environment never dirties the working tree, so switching between
 local and staging is not something your teammates see in a diff.
@@ -155,17 +211,23 @@ local and staging is not something your teammates see in a diff.
   exact bytes that were sent
 - Per-hop redirect handling, gzip/deflate/br/zstd decoding, per-workspace
   timeout and TLS-verification toggle
+- Copy any request as cURL, or import one by pasting a cURL command
+- Native right-click menus throughout the tree and the tab strip
 - Drag and drop to reorder and reorganise; ordering is stored per file
+- Resizable sidebar and response pane, both remembered between sessions
 - Deletes go to the OS trash
 - Watches the folder, so a `git pull` or an edit in your editor shows up
-- Dark, keyboard-driven UI
+- Dark, keyboard-driven UI with the app's own title bar and window controls
 
 ### Shortcuts
 
 `Ctrl+Enter` send · `Ctrl+.` cancel · `Ctrl+S` save · `Ctrl+N` new request ·
-`Ctrl+Shift+N` new folder · `Ctrl+W` close tab · `Ctrl+L` focus URL ·
-`Ctrl+E` environments · `Ctrl+R` reload from disk · `Ctrl+O` open workspace ·
-`F1` scripting reference
+`Ctrl+Shift+N` new folder · `Ctrl+I` import from cURL ·
+`Ctrl+Shift+C` copy as cURL · `Ctrl+W` close tab · `Ctrl+L` focus URL ·
+`Ctrl+E` environments · `Ctrl+H` history · `Ctrl+R` reload from disk ·
+`Ctrl+O` open workspace · `F1` scripting reference · `F12` dev tools
+
+The menu bar lives behind the ☰ button in the title bar.
 
 ## Building
 
@@ -211,12 +273,13 @@ src/
     dotenv.ts         comment-preserving .env parser and writer
     workspace.ts      the collection store on disk
     http.ts           request engine (node:http/https, timings, redirects)
+    curl.ts           cURL export and import
     prepare.ts        request + variables -> bytes on the wire
     interpolate.ts    {{VARIABLE}} substitution
     scripting.ts      the node:vm sandbox and assertion library
     execute.ts        orchestrates one request end to end
     ipc.ts            every renderer -> main entry point
-    state.ts          machine-local UI state
+    state.ts          machine-local state: recents, history, layout, tabs
   preload/            the contextBridge, the renderer's only way out
   renderer/           React UI
 ```
