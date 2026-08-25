@@ -72,13 +72,18 @@ after(async () => {
   await fs.rm(dir, { recursive: true, force: true })
 })
 
-const run = (partial: Partial<FrapRequest>, vars = new Map<string, string>()) =>
+const run = (
+  partial: Partial<FrapRequest>,
+  vars = new Map<string, string>(),
+  userAgent?: string
+) =>
   execute({
     root: dir,
     request: normalizeRequest(partial, 'Test'),
     envPath: path.join(dir, '.env'),
     settings: DEFAULT_SETTINGS,
-    vars
+    vars,
+    userAgent
   })
 
 test('interpolates {{VARS}} from the .env file', async () => {
@@ -294,6 +299,30 @@ test('an unreachable host produces an error, not a crash', async () => {
 test('unresolved variables are surfaced as a warning', async () => {
   const result = await run({ method: 'GET', url: '{{BASE_URL}}/echo/{{NOT_SET}}' })
   assert.ok(result.logs.some((l) => l.level === 'warn' && l.message.includes('{{NOT_SET}}')))
+})
+
+test('the caller supplies the User-Agent, so it cannot drift from the app', async () => {
+  const result = await run(
+    { method: 'GET', url: '{{BASE_URL}}/echo' },
+    new Map(),
+    'Frap/9.9.9'
+  )
+  const echoed = JSON.parse(result.response!.bodyText)
+  assert.equal(echoed.headers['user-agent'], 'Frap/9.9.9')
+})
+
+test('a request setting its own User-Agent keeps it', async () => {
+  const result = await run(
+    {
+      method: 'GET',
+      url: '{{BASE_URL}}/echo',
+      headers: [{ enabled: true, key: 'User-Agent', value: 'mine/1.0' }]
+    },
+    new Map(),
+    'Frap/9.9.9'
+  )
+  const echoed = JSON.parse(result.response!.bodyText)
+  assert.equal(echoed.headers['user-agent'], 'mine/1.0')
 })
 
 test('timings are recorded', async () => {

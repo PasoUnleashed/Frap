@@ -19,6 +19,8 @@ export interface ExecuteInput {
   settings: WorkspaceConfig['settings']
   /** Session variables, shared across requests so scripts can chain them. */
   vars: Map<string, string>
+  /** User-Agent for requests that do not set their own. */
+  userAgent?: string
   signal?: AbortSignal
 }
 
@@ -32,7 +34,7 @@ function previewOf(body: Buffer | null): string {
 }
 
 export async function execute(input: ExecuteInput): Promise<ExecResult> {
-  const { root, request, envPath, settings, vars, signal } = input
+  const { root, request, envPath, settings, vars, userAgent, signal } = input
 
   const result: ExecResult = {
     requestId: request.id,
@@ -54,7 +56,7 @@ export async function execute(input: ExecuteInput): Promise<ExecResult> {
   }
   for (const [key, value] of vars) scope[key] = value
 
-  const prepareCtx: PrepareContext = { root, scope, missing: new Set() }
+  const prepareCtx: PrepareContext = { root, scope, missing: new Set(), userAgent }
 
   let mutable
   try {

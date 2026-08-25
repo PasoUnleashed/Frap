@@ -39,6 +39,12 @@ export interface PrepareContext {
   scope: Record<string, string>
   /** Collects `{{names}}` that had no value, for a warning in the UI. */
   missing: Set<string>
+  /**
+   * Sent as User-Agent unless the request sets its own. Passed in rather than
+   * written here, so the version can come from the running app and cannot
+   * drift from package.json.
+   */
+  userAgent?: string
 }
 
 /** The mutable request shape scripts see as `frap.request`. */
@@ -229,7 +235,7 @@ export async function finalize(
     }
   }
 
-  if (!hasHeader('user-agent')) headers.set('User-Agent', 'Frap/0.1.0')
+  if (!hasHeader('user-agent')) headers.set('User-Agent', ctx.userAgent || 'Frap')
   if (!hasHeader('accept')) headers.set('Accept', '*/*')
   if (!hasHeader('accept-encoding')) headers.set('Accept-Encoding', 'gzip, deflate, br')
   if (body && !hasHeader('content-length')) headers.set('Content-Length', String(body.length))

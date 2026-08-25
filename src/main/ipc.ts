@@ -83,6 +83,12 @@ export interface ContextMenuItem {
   checked?: boolean
 }
 
+/**
+ * What Frap identifies itself as, for requests that set no User-Agent.
+ * Taken from the app rather than written out, so it tracks package.json.
+ */
+const userAgent = (): string => `Frap/${app.getVersion()}`
+
 /** Session variables live for as long as the app runs, keyed by workspace. */
 const sessionVars = new Map<string, Map<string, string>>()
 /** In-flight requests, so the UI can cancel them. */
@@ -270,6 +276,7 @@ async function sendDraft(
       envPath: null,
       settings: DEFAULT_SETTINGS,
       vars: draftVars,
+      userAgent: userAgent(),
       signal: controller.signal
     })
     return { ...result, runId }
@@ -669,6 +676,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         envPath,
         settings: config.settings,
         vars: varsFor(root),
+        userAgent: userAgent(),
         signal: controller.signal
       })
       // Re-mark: a long request can outlive the grace period, and a script's
