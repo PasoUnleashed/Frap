@@ -217,6 +217,7 @@ local and staging is not something your teammates see in a diff.
 - Resizable sidebar and response pane, both remembered between sessions
 - Deletes go to the OS trash
 - Watches the folder, so a `git pull` or an edit in your editor shows up
+  — and stays quiet about Frap's own writes
 - Dark, keyboard-driven UI with the app's own title bar and window controls
 
 ### Shortcuts
@@ -280,6 +281,7 @@ src/
     execute.ts        orchestrates one request end to end
     ipc.ts            every renderer -> main entry point
     state.ts          machine-local state: recents, history, layout, tabs
+    selfwrites.ts     tells our own disk writes from everyone else's
   preload/            the contextBridge, the renderer's only way out
   renderer/           React UI
 ```

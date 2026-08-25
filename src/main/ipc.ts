@@ -8,6 +8,7 @@ import * as path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import {
   REQUEST_EXT,
+  WORKSPACE_FILE,
   type EnvFileView,
   type ExecResult,
   type FrapRequest,
@@ -28,6 +29,7 @@ import {
 import { execute } from './execute.ts'
 import { parseCurl, toCurl } from './curl.ts'
 import { toMutable } from './prepare.ts'
+import { SelfWriteTracker } from './selfwrites.ts'
 import {
   createFolder,
   createRequest,
@@ -122,26 +124,41 @@ async function activeScope(): Promise<Record<string, string>> {
 /* ------------------------------------------------------------------ */
 
 /**
+ * Paths Frap itself just wrote. The renderer already knows about its own
+ * edits, so re-announcing them as "the disk changed" is pure noise.
+ */
+const selfWrites = new SelfWriteTracker()
+
+const markSelfWrite = (...targets: Array<string | null | undefined>): void =>
+  selfWrites.mark(...targets)
+
+/**
  * Watches the workspace so a `git pull` or an edit in another editor shows up
  * without restarting. Debounced, because a checkout fires hundreds of events.
+ *
+ * Filtering happens at flush time rather than per event: a write marks its
+ * path immediately after finishing, which can land just after the raw event
+ * arrives but always well before the debounce fires.
  */
 function watchWorkspace(root: string, window: BrowserWindow): void {
   watcher?.close()
   watcher = null
   let timer: NodeJS.Timeout | null = null
+  let pending: string[] = []
+
   try {
-    watcher = watch(
-      root,
-      { recursive: true },
-      (_event, filename) => {
-        const name = String(filename ?? '')
-        if (name.includes('.git') || name.includes('node_modules')) return
-        if (timer) clearTimeout(timer)
-        timer = setTimeout(() => {
-          if (!window.isDestroyed()) window.webContents.send('workspace:changed', name)
-        }, 250)
-      }
-    )
+    watcher = watch(root, { recursive: true }, (_event, filename) => {
+      const name = String(filename ?? '')
+      if (!name || name.includes('.git') || name.includes('node_modules')) return
+      pending.push(name)
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        const external = pending.filter((file) => !selfWrites.has(path.resolve(root, file)))
+        pending = []
+        if (external.length === 0) return
+        if (!window.isDestroyed()) window.webContents.send('workspace:changed', external[0])
+      }, 250)
+    })
   } catch {
     // Recursive watching is unsupported on some platforms/filesystems; the
     // manual refresh button still works.
@@ -231,6 +248,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
   handle('workspace:saveConfig', async (config: WorkspaceConfig) => {
     const { root } = requireWorkspace()
+    markSelfWrite(path.join(root, WORKSPACE_FILE))
     await writeConfig(root, config)
     current = { root, config }
     return { config, environments: await listEnvironments() }
@@ -275,18 +293,23 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   handle('request:save', async (absPath: string, req: FrapRequest) => {
     const { root } = requireWorkspace()
     assertInside(root, absPath)
+    markSelfWrite(absPath)
     await writeRequest(absPath, normalizeRequest(req, path.basename(absPath)))
     return true
   })
 
   handle('request:create', async (parentDir: string, name?: string) => {
     const { root } = requireWorkspace()
-    return createRequest(root, parentDir || root, name)
+    const created = await createRequest(root, parentDir || root, name)
+    markSelfWrite(created)
+    return created
   })
 
   handle('request:duplicate', async (absPath: string) => {
     const { root } = requireWorkspace()
-    return duplicateRequest(root, absPath)
+    const copy = await duplicateRequest(root, absPath)
+    markSelfWrite(copy)
+    return copy
   })
 
   /* -- cURL ---------------------------------------------------------- */
@@ -340,27 +363,37 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     const siblings = await scanTree(root, target)
     request.name = path.basename(file).slice(0, -REQUEST_EXT.length)
     request.order = siblings.reduce((m, n) => Math.max(m, n.order), 0) + 1
+    markSelfWrite(file)
     await fs.writeFile(file, serializeRequest(request), 'utf8')
     return { path: file, warnings }
   })
 
   handle('folder:create', async (parentDir: string, name?: string) => {
     const { root } = requireWorkspace()
-    return createFolder(root, parentDir || root, name)
+    const created = await createFolder(root, parentDir || root, name)
+    markSelfWrite(created)
+    return created
   })
 
   handle('node:rename', async (absPath: string, name: string) => {
     const { root } = requireWorkspace()
-    return renameNode(root, absPath, name)
+    markSelfWrite(absPath)
+    const renamed = await renameNode(root, absPath, name)
+    markSelfWrite(renamed)
+    return renamed
   })
 
   handle('node:move', async (absPath: string, destDir: string) => {
     const { root } = requireWorkspace()
-    return moveNode(root, absPath, destDir)
+    markSelfWrite(absPath)
+    const moved = await moveNode(root, absPath, destDir)
+    markSelfWrite(moved)
+    return moved
   })
 
   handle('node:reorder', async (parentDir: string, orderedPaths: string[]) => {
     const { root } = requireWorkspace()
+    markSelfWrite(...orderedPaths)
     await reorder(root, parentDir, orderedPaths)
     return true
   })
@@ -368,6 +401,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   handle('node:delete', async (absPath: string) => {
     const { root } = requireWorkspace()
     assertInside(root, absPath)
+    markSelfWrite(absPath)
     // Goes to the OS trash, so a mis-click is recoverable.
     await shell.trashItem(absPath)
     return true
@@ -398,6 +432,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     const name = path.basename(picked).replace(/^\.env\.?/, '') || path.basename(picked)
     if (!config.environments.some((e) => e.file === file)) {
       config.environments = [...config.environments, { name: name || 'default', file }]
+      markSelfWrite(path.join(root, WORKSPACE_FILE))
       await writeConfig(root, config)
       current = { root, config }
     }
@@ -408,6 +443,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     const { root, config } = requireWorkspace()
     const target = path.resolve(root, fileName)
     assertInside(root, target)
+    markSelfWrite(target, path.join(root, WORKSPACE_FILE))
     if (!(await fs.stat(target).catch(() => null))) {
       await fs.writeFile(
         target,
@@ -428,6 +464,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     const { root, config } = requireWorkspace()
     // Only unlinks it from the workspace; the file itself stays on disk.
     config.environments = config.environments.filter((e) => e.name !== name)
+    markSelfWrite(path.join(root, WORKSPACE_FILE))
     await writeConfig(root, config)
     current = { root, config }
     const state = await getWorkspaceState(root)
@@ -440,6 +477,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     const env = config.environments.find((e) => e.name === name)
     if (!env) throw new Error(`Unknown environment: ${name}`)
     const absPath = envAbsPath(root, env.file)
+    markSelfWrite(absPath)
     const { doc } = await readEnvDoc(absPath)
     if (value === null) unsetEnvValue(doc, key)
     else setEnvValue(doc, key, value)
@@ -452,6 +490,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     const env = config.environments.find((e) => e.name === name)
     if (!env) throw new Error(`Unknown environment: ${name}`)
     const absPath = envAbsPath(root, env.file)
+    markSelfWrite(absPath)
     await fs.mkdir(path.dirname(absPath), { recursive: true })
     // Written verbatim - the user is editing the file itself here, so we do
     // not reformat, reorder or re-quote anything.
@@ -469,14 +508,20 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     inflight.set(runId, controller)
     try {
       const request = normalizeRequest(req, path.basename(absPath))
+      const envPath = await activeEnvPath()
+      // Scripts may write to the environment; that is still our own write.
+      markSelfWrite(envPath)
       const result = await execute({
         root,
         request,
-        envPath: await activeEnvPath(),
+        envPath,
         settings: config.settings,
         vars: varsFor(root),
         signal: controller.signal
       })
+      // Re-mark: a long request can outlive the grace period, and a script's
+      // env write lands at the very end of execute().
+      if (result.envWrites.length) markSelfWrite(envPath)
       if (!result.skipped) {
         const entry: HistoryEntry = {
           id: runId,
