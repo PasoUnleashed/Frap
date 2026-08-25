@@ -1,0 +1,147 @@
+name: Release
+
+# Every commit on main produces downloadable portable builds for all three
+# desktop platforms. Bumping the version in package.json turns that build into
+# a proper release; everything else is published as a prerelease so the list
+# stays readable.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# A newer push supersedes one still building, but never cancels a release
+# that is already uploading.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  meta:
+    name: Work out the version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Enough history to see whether package.json's version just changed.
+          fetch-depth: 2
+
+      - id: meta
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          previous=$(git show HEAD~1:package.json 2>/dev/null \
+            | node -pe "JSON.parse(require('fs').readFileSync(0,'utf8')).version" 2>/dev/null || true)
+
+          if [ "$version" != "$previous" ]; then
+            echo "Version changed ${previous:-(none)} -> $version: cutting a release."
+            echo "tag=v$version"        >> "$GITHUB_OUTPUT"
+            echo "prerelease=false"     >> "$GITHUB_OUTPUT"
+          else
+            echo "Version unchanged at $version: publishing a build."
+            echo "tag=v$version-build.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true"      >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.label }}
+    needs: meta
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should not deny you the other two.
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: windows
+            script: build:win
+          - os: macos-latest
+            label: macos
+            script: build:mac
+          - os: ubuntu-latest
+            label: linux
+            script: build:linux
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # Cheap, and it catches platform-specific problems - path casing and
+      # line endings are both covered by the suite.
+      - name: Test
+        run: npm test
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run ${{ matrix.script }}
+        env:
+          # No Apple Developer certificate here, so skip the signing attempt
+          # rather than failing the build.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Collect artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: frap-${{ matrix.label }}
+          if-no-files-found: error
+          retention-days: 7
+          # Only the distributable files; the unpacked build trees stay behind.
+          path: |
+            release/*.exe
+            release/*.AppImage
+            release/*.tar.gz
+            release/*.dmg
+            release/*.zip
+
+  release:
+    name: Publish
+    needs: [meta, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Gather every platform's artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List what will be published
+        run: ls -lh dist
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.meta.outputs.tag }}
+          name: Frap ${{ needs.meta.outputs.version }}
+          prerelease: ${{ needs.meta.outputs.prerelease }}
+          # Re-running a build replaces the assets rather than duplicating them.
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          body: |
+            Portable builds of Frap ${{ needs.meta.outputs.version }}, built from `${{ github.sha }}`.
+
+            | Platform | Download | Notes |
+            |---|---|---|
+            | Windows | `Frap-${{ needs.meta.outputs.version }}-windows-x64-portable.exe` | Single file, no install. Settings live in `frap-data` beside the exe. |
+            | Windows | `Frap-${{ needs.meta.outputs.version }}-windows-x64-setup.exe` | Installer, if you would rather have Start-menu entries. |
+            | macOS (Apple Silicon) | `Frap-${{ needs.meta.outputs.version }}-macos-arm64.zip` | Unzip and run. Unsigned: right-click → Open the first time. |
+            | macOS (Intel) | `Frap-${{ needs.meta.outputs.version }}-macos-x64.zip` | As above. `.dmg` also attached. |
+            | Linux | `Frap-${{ needs.meta.outputs.version }}-linux-x64.AppImage` | `chmod +x` and run. `.tar.gz` also attached. |

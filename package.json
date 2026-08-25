@@ -1,6 +1,6 @@
 {
   "name": "frap",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Frap - a git-friendly API testing client. Collections are plain JSON files on disk.",
   "main": "./out/main/index.js",
   "author": "Faisal Alsajjan",
@@ -11,10 +11,10 @@
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "build": "electron-vite build",
-    "build:portable": "electron-vite build && electron-builder --win portable",
-    "build:win": "electron-vite build && electron-builder --win",
-    "build:linux": "electron-vite build && electron-builder --linux",
-    "build:mac": "electron-vite build && electron-builder --mac",
+    "build:portable": "electron-vite build && electron-builder --win portable --publish never",
+    "build:win": "electron-vite build && electron-builder --win --publish never",
+    "build:linux": "electron-vite build && electron-builder --linux --publish never",
+    "build:mac": "electron-vite build && electron-builder --mac --publish never",
     "test": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test test/*.test.ts"
   },
   "devDependencies": {

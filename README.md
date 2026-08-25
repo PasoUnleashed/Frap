@@ -7,7 +7,7 @@ per request — and environments are ordinary `.env` files you point at. Commit
 them, branch them, review them in a pull request, and merge them without a
 proprietary sync service in the middle.
 
-Ships as a single portable `.exe`.
+Ships as a single portable executable for Windows, macOS and Linux.
 
 ---
 
@@ -249,6 +249,23 @@ local and staging is not something your teammates see in a diff.
 
 The menu bar lives behind the ☰ button in the title bar.
 
+## Downloads
+
+Every commit to `main` publishes builds for all three platforms on the
+[releases page](https://github.com/PasoUnleashed/Frap/releases).
+
+| Platform | File | Notes |
+|---|---|---|
+| Windows | `...-windows-x64-portable.exe` | One file, no install. Settings live in `frap-data` beside it, so it runs from a USB stick. |
+| Windows | `...-windows-x64-setup.exe` | Installer, if you want Start-menu entries. |
+| macOS | `...-macos-arm64.zip` / `...-macos-x64.zip` | Unzip and run. Unsigned, so right-click → Open the first time. `.dmg` also attached. |
+| Linux | `...-linux-x64.AppImage` | `chmod +x` and run. `.tar.gz` also attached. |
+
+Bumping the version in `package.json` cuts a full release tagged
+`v<version>`; any other commit publishes a prerelease tagged
+`v<version>-build.<n>`, so routine builds stay available without burying the
+real ones.
+
 ## Building
 
 ```bash
@@ -256,25 +273,21 @@ npm install
 npm run dev
 ```
 
-A single portable executable — no installer, no runtime to install, settings
-kept in a `frap-data` folder beside the exe so it travels on a USB stick:
+Packaging, with output in `release/`:
 
 ```bash
-npm run build:portable
+npm run build:portable   # just the portable Windows exe
+npm run build:win        # portable exe + NSIS installer
+npm run build:mac        # zip + dmg, Intel and Apple Silicon
+npm run build:linux      # AppImage + tar.gz
 ```
 
-Output lands in `release/`. Other targets:
-
-```bash
-npm run build:win      # portable exe + NSIS installer
-npm run build:linux    # AppImage
-npm run build:mac      # dmg
-```
-
-Tests:
+Each platform has to be built on itself, which is what the release workflow
+does. Tests and typechecking:
 
 ```bash
 npm test
+npm run typecheck
 ```
 
 ## Try it

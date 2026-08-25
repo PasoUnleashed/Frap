@@ -25,10 +25,10 @@ win:
     - target: nsis
       arch: [x64]
   icon: build/icon.png
-  artifactName: ${productName}-${version}-${arch}.${ext}
+  artifactName: ${productName}-${version}-windows-${arch}.${ext}
 
 portable:
-  artifactName: ${productName}-${version}-portable.exe
+  artifactName: ${productName}-${version}-windows-x64-portable.exe
   # Keeps the extraction folder stable so the app is not re-unpacked every run.
   unicode: false
   requestExecutionLevel: user
@@ -37,18 +37,35 @@ nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
-  artifactName: ${productName}-${version}-setup.exe
+  artifactName: ${productName}-${version}-windows-x64-setup.exe
 
 linux:
+  # AppImage is the portable format: one executable file, no install step.
+  # The tarball is for anyone who would rather unpack it themselves.
   target:
-    - AppImage
+    - target: AppImage
+      arch: [x64]
+    - target: tar.gz
+      arch: [x64]
   category: Development
   icon: build/icon.png
-  artifactName: ${productName}-${version}-${arch}.${ext}
+  synopsis: A git-friendly API client
+  description: >-
+    An API client whose collections are plain files: one JSON file per request
+    and ordinary .env files for environments, so they merge like code.
+  artifactName: ${productName}-${version}-linux-${arch}.${ext}
 
 mac:
+  # The zip holds a ready-to-run .app - drag it anywhere, no installer.
+  # Both architectures are built so Apple Silicon runs natively.
   target:
-    - dmg
+    - target: zip
+      arch: [x64, arm64]
+    - target: dmg
+      arch: [x64, arm64]
   category: public.app-category.developer-tools
   icon: build/icon.png
-  artifactName: ${productName}-${version}-${arch}.${ext}
+  # Unsigned builds still run; Gatekeeper needs a right-click > Open the
+  # first time. Signing would require an Apple Developer certificate.
+  identity: null
+  artifactName: ${productName}-${version}-macos-${arch}.${ext}
