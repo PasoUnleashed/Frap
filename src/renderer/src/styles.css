@@ -394,7 +394,11 @@ input[type='checkbox'] {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 3px 8px 3px 0;
+  /* A fixed height, so nothing appearing inside a row - the hover buttons,
+     the rename box - can change it and shift every row below. */
+  height: 26px;
+  padding: 0 8px 0 0;
+  position: relative;
   cursor: pointer;
   border-left: 2px solid transparent;
   white-space: nowrap;
@@ -417,7 +421,9 @@ input[type='checkbox'] {
 }
 .tree:focus-visible .tree-row.selected {
   box-shadow: inset 0 0 0 1px var(--accent-dim);
-  background: rgba(91, 140, 255, 0.1);
+  /* Opaque rather than a translucent accent, so the hover buttons can inherit
+     it and still hide the label behind them. */
+  background: #1d2538;
 }
 /* A cut row stays put until it is pasted, so it is dimmed rather than hidden. */
 .tree-row.cut {
@@ -449,13 +455,34 @@ input[type='checkbox'] {
   background: var(--warn);
   vertical-align: middle;
 }
+/* Taken out of the flow entirely: the buttons float over the right-hand end
+   of the row on hover rather than squeezing the label, so appearing and
+   disappearing costs no reflow at all. */
 .tree-row .actions {
   display: none;
-  margin-left: auto;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 6px;
+  align-items: center;
   gap: 2px;
+  padding-left: 12px;
+  background-color: inherit;
 }
 .tree-row:hover .actions {
   display: flex;
+}
+.tree-row .actions button {
+  height: 20px;
+  padding: 0 6px;
+  border: none;
+  line-height: 1;
+}
+
+/* The rename box has to fit the row rather than stretch it. */
+.tree-row input[type='text'] {
+  height: 22px;
+  padding: 0 6px;
 }
 
 .method {
