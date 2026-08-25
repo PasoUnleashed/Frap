@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type JSX, type MouseEvent } from 'react'
+import { WELCOME_TAB } from '@shared/types'
 import { api, type MenuItem } from './api'
 import { EnvironmentsDialog } from './components/EnvironmentsDialog'
 import { ImportCurlDialog } from './components/ImportCurlDialog'
@@ -156,10 +157,14 @@ function WorkspaceChip(): JSX.Element {
       ref={chipRef}
       className="workspace-chip"
       onClick={() => void openMenu()}
-      title={`${state.root}\nSwitch workspace`}
+      title={
+        state.root
+          ? `${state.root}\nSwitch workspace`
+          : 'This collection is not saved to a folder yet'
+      }
     >
-      <span className="name">{state.config?.name}</span>
-      <span className="path">{state.root}</span>
+      <span className="name">{state.config?.name ?? 'Unsaved collection'}</span>
+      {state.root && <span className="path">{state.root}</span>}
       <span className="caret">⌄</span>
     </button>
   )
@@ -295,6 +300,26 @@ function TabStrip(): JSX.Element {
         >
           ‹
         </button>
+      )}
+
+      {state.welcomeOpen && (
+        <div
+          className={`tab welcome-tab${state.activeTab === WELCOME_TAB ? ' active' : ''}`}
+          onClick={() => actions.selectTab(WELCOME_TAB)}
+          onAuxClick={(e) => e.button === 1 && actions.showWelcome(false)}
+          title="Welcome"
+        >
+          <span className="name">Welcome</span>
+          <span
+            className="close"
+            onClick={(e) => {
+              e.stopPropagation()
+              actions.showWelcome(false)
+            }}
+          >
+            ×
+          </span>
+        </div>
       )}
 
       <div
@@ -521,11 +546,17 @@ function Workbench(): JSX.Element {
     }
     const unsubscribes = [
       window.frap.on('menu:openWorkspace', () => void actions.pickAndOpen()),
-      window.frap.on('menu:newRequest', () => state.root && void actions.createRequest(state.root)),
+      window.frap.on('menu:newRequest', () =>
+        state.root ? void actions.createRequest(state.root) : actions.newDraft()
+      ),
       window.frap.on('menu:newFolder', () => state.root && void actions.createFolder(state.root)),
-      window.frap.on('menu:importCurl', () => state.root && actions.openImportCurl(state.root)),
+      window.frap.on('menu:importCurl', () => actions.openImportCurl(state.root ?? '')),
       window.frap.on('menu:copyCurl', withActive((t) => void actions.copyCurl(t.path))),
-      window.frap.on('menu:save', withActive((t) => void actions.save(t.path))),
+      window.frap.on('menu:save', () => {
+        const current = active()
+        if (current) void actions.save(current.path)
+        else if (!state.root) void actions.saveDrafts()
+      }),
       window.frap.on('menu:closeTab', withActive((t) => void actions.closeTab(t.path))),
       window.frap.on(
         'menu:closeOtherTabs',
@@ -565,7 +596,9 @@ function Workbench(): JSX.Element {
       />
       <main className="main">
         <TabStrip />
-        {tab ? (
+        {state.activeTab === WELCOME_TAB ? (
+          <Welcome />
+        ) : tab ? (
           <>
             <UrlBar tab={tab} urlRef={urlRef} />
             <div className="split" style={{ ['--response-height' as string]: `${responseHeight}%` }}>
@@ -627,12 +660,16 @@ export function App(): JSX.Element {
           <BrandMark />
         </div>
 
-        {state.root ? (
+        {/* The chip is always here: without a folder it names the unsaved
+            collection, and it is still the way back to a recent one. */}
+        <WorkspaceChip />
+
+        <span className="spacer drag-region" />
+
+        {/* Environments and workspace settings are files in the folder, so
+            they only exist once there is one. */}
+        {state.root && (
           <>
-            <WorkspaceChip />
-
-            <span className="spacer drag-region" />
-
             <select
               className="env-select"
               value={state.activeEnv ?? ''}
@@ -662,17 +699,16 @@ export function App(): JSX.Element {
             >
               ⚙
             </button>
-            <button
-              className="ghost"
-              onClick={() => actions.toggle('showHelp')}
-              title="Scripting reference (F1)"
-            >
-              ?
-            </button>
           </>
-        ) : (
-          <span className="spacer drag-region" />
         )}
+
+        <button
+          className="ghost"
+          onClick={() => actions.toggle('showHelp')}
+          title="Scripting reference (F1)"
+        >
+          ?
+        </button>
 
         <WindowControls />
       </div>
@@ -690,7 +726,7 @@ export function App(): JSX.Element {
         </div>
       )}
 
-      {state.root ? <Workbench /> : <Welcome />}
+      <Workbench />
 
       {state.showEnvs && <EnvironmentsDialog />}
       {state.showHelp && <ScriptingHelp />}

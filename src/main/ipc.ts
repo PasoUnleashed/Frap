@@ -2,12 +2,22 @@
  * Every renderer -> main entry point. The renderer has no filesystem or
  * network access of its own; it asks for things here.
  */
-import { BrowserWindow, Menu, clipboard, dialog, ipcMain, shell, type MenuItemConstructorOptions } from 'electron'
+import {
+  BrowserWindow,
+  Menu,
+  app,
+  clipboard,
+  dialog,
+  ipcMain,
+  shell,
+  type MenuItemConstructorOptions
+} from 'electron'
 import { promises as fs, watch, type FSWatcher } from 'node:fs'
 import * as path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import {
   WORKSPACE_FILE,
+  isDraftPath,
   type EnvFileView,
   type ExecResult,
   type FrapRequest,
@@ -32,6 +42,7 @@ import { parseCurl, toCurl } from './curl.ts'
 import { toMutable } from './prepare.ts'
 import { SelfWriteTracker } from './selfwrites.ts'
 import {
+  DEFAULT_SETTINGS,
   copyNode,
   createFolder,
   createRequest,
@@ -113,6 +124,13 @@ async function activeEnvPath(): Promise<string | null> {
  * where each value came from, for the hover card in the editor.
  */
 async function activeScopeDetailed(): Promise<VariableScope> {
+  // An unsaved collection has no .env behind it, so only session values
+  // set by scripts can resolve.
+  if (!current) {
+    return Object.fromEntries(
+      [...draftVars].map(([key, value]) => [key, { value, source: 'session' as const }])
+    )
+  }
   const { root } = requireWorkspace()
   const state = await getWorkspaceState(root)
   const envPath = await activeEnvPath()
@@ -220,6 +238,47 @@ async function listEnvironments(): Promise<EnvFileView[]> {
 }
 
 /* ------------------------------------------------------------------ */
+/* Drafts                                                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Session variables for the unsaved collection. Kept apart from the
+ * per-workspace maps so saving into a folder does not inherit them and,
+ * more importantly, so they do not leak the other way.
+ */
+const draftVars = new Map<string, string>()
+
+/**
+ * Sends a request that has no file behind it.
+ *
+ * There is no workspace, so: no .env to read or write, the built-in
+ * settings, and file-backed bodies resolve against the user's home rather
+ * than a collection folder. Nothing is recorded in history - there is no
+ * workspace to record it against.
+ */
+async function sendDraft(
+  draftPath: string,
+  req: FrapRequest
+): Promise<ExecResult & { runId: string }> {
+  const runId = randomUUID()
+  const controller = new AbortController()
+  inflight.set(runId, controller)
+  try {
+    const result = await execute({
+      root: app.getPath('home'),
+      request: normalizeRequest(req, 'Draft'),
+      envPath: null,
+      settings: DEFAULT_SETTINGS,
+      vars: draftVars,
+      signal: controller.signal
+    })
+    return { ...result, runId }
+  } finally {
+    inflight.delete(runId)
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Registration                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -258,6 +317,48 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       ...workspace,
       state: await getWorkspaceState(workspace.root),
       environments: await listEnvironments()
+    }
+  })
+
+  /**
+   * Gives an unsaved collection a home.
+   *
+   * Asks for a folder, opens it as a workspace, then writes every draft into
+   * it in order. Returns the new paths positionally, so the renderer can
+   * re-point the tabs it already has open without losing anything.
+   */
+  handle('workspace:saveDrafts', async (drafts: FrapRequest[]) => {
+    const window = getWindow()
+    const result = await dialog.showOpenDialog(window!, {
+      title: 'Choose a folder for this collection',
+      buttonLabel: 'Save Here',
+      properties: ['openDirectory', 'createDirectory']
+    })
+    if (result.canceled) return null
+
+    const root = result.filePaths[0]
+    const workspace = await openWorkspace(root)
+    current = { root: workspace.root, config: workspace.config }
+    await rememberWorkspace(workspace.root)
+    markSelfWrite(root, path.join(root, WORKSPACE_FILE))
+
+    const paths: string[] = []
+    for (const draft of drafts) {
+      const file = await writeNewRequest(root, root, normalizeRequest(draft, 'New Request'))
+      markSelfWrite(file)
+      paths.push(file)
+    }
+
+    const win = getWindow()
+    if (win) watchWorkspace(workspace.root, win)
+
+    return {
+      ...workspace,
+      // Re-scan: the tree above was taken before the drafts were written.
+      tree: await scanTree(root),
+      state: await getWorkspaceState(workspace.root),
+      environments: await listEnvironments(),
+      paths
     }
   })
 
@@ -343,6 +444,22 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
    * already resolved, and puts it on the clipboard.
    */
   handle('request:toCurl', async (absPath: string, req?: FrapRequest) => {
+    // A draft has no file to fall back on, so the editor's copy is all there
+    // is - and no workspace settings to honour.
+    if (isDraftPath(absPath)) {
+      if (!req) throw new Error('Nothing to copy yet')
+      const request = normalizeRequest(req, 'Draft')
+      const missing = new Set<string>()
+      const scope = await activeScope()
+      const mutable = toMutable(request, { root: app.getPath('home'), scope, missing })
+      const command = toCurl(request, mutable, {
+        followRedirects: DEFAULT_SETTINGS.followRedirects,
+        validateTls: DEFAULT_SETTINGS.validateTls
+      })
+      clipboard.writeText(command)
+      return { command, missing: [...missing] }
+    }
+
     const { root, config } = requireWorkspace()
     assertInside(root, absPath)
     // Prefer the in-editor version so unsaved edits are included.
@@ -532,6 +649,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   /* -- execution ----------------------------------------------------- */
 
   handle('exec:send', async (absPath: string, req: FrapRequest): Promise<ExecResult & { runId: string }> => {
+    // A draft has no folder yet, so it runs against no environment and no
+    // workspace settings. Everything else about sending is identical.
+    if (isDraftPath(absPath)) return sendDraft(absPath, req)
+
     const { root, config } = requireWorkspace()
     assertInside(root, absPath)
     const runId = randomUUID()

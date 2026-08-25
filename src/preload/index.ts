@@ -50,6 +50,7 @@ const api = {
     pick: () => call<string | null>('workspace:pick'),
     open: (root: string) => call<unknown>('workspace:open', root),
     refresh: () => call<unknown>('workspace:refresh'),
+    saveDrafts: (drafts: unknown[]) => call<unknown>('workspace:saveDrafts', drafts),
     saveConfig: (config: unknown) => call<unknown>('workspace:saveConfig', config),
     recent: () =>
       call<{ recent: Array<{ root: string; name: string }>; last: string | null }>(

@@ -1,6 +1,18 @@
 /** On-disk + IPC types shared between main, preload and renderer. */
 
 export const FILE_FORMAT = 1
+
+/**
+ * Tab identifiers for things that are not a file on disk.
+ *
+ * A collection can be worked on before it has a home: requests start as
+ * drafts held in memory, addressed by `draft:<uuid>` rather than a path, and
+ * only become files when the collection is saved into a folder.
+ */
+export const DRAFT_PREFIX = 'draft:'
+export const WELCOME_TAB = 'welcome:'
+
+export const isDraftPath = (target: string): boolean => target.startsWith(DRAFT_PREFIX)
 export const REQUEST_EXT = '.frap.json'
 export const FOLDER_META = '_folder.frap.json'
 export const WORKSPACE_FILE = 'frap.workspace.json'

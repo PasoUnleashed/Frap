@@ -11,9 +11,10 @@ export function Welcome(): JSX.Element {
         <p className="tagline">A lightweight, git compatible API client.</p>
 
         <div className="row" style={{ justifyContent: 'center' }}>
-          <button className="primary" onClick={() => void actions.pickAndOpen()}>
-            Open a folder
+          <button className="primary" onClick={() => actions.newDraft()}>
+            New request
           </button>
+          <button onClick={() => void actions.pickAndOpen()}>Open a folder</button>
         </div>
 
         {state.recent.length > 0 && (

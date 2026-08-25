@@ -17,7 +17,11 @@ import {
   type ReactNode
 } from 'react'
 import {
+  DRAFT_PREFIX,
+  FILE_FORMAT,
   REQUEST_EXT,
+  WELCOME_TAB,
+  isDraftPath,
   type EnvFileView,
   type ExecResult,
   type FrapRequest,
@@ -33,6 +37,27 @@ import { api, type LayoutState } from './api'
 const labelOf = (target: string): string => {
   const base = target.split(/[\\/]/).pop() ?? target
   return base.endsWith(REQUEST_EXT) ? base.slice(0, -REQUEST_EXT.length) : base
+}
+
+/**
+ * A request that exists only in memory. Main normalises whatever it is given
+ * when the collection is saved, so this only has to be complete enough to
+ * edit and send.
+ */
+function blankRequest(name = 'New Request'): FrapRequest {
+  return {
+    frap: FILE_FORMAT,
+    id: crypto.randomUUID(),
+    name,
+    order: 0,
+    method: 'GET',
+    url: '',
+    params: [],
+    headers: [],
+    auth: { type: 'none' },
+    body: { mode: 'none' },
+    scripts: { preRequest: '', postResponse: '' }
+  }
 }
 
 export type RequestTab = 'params' | 'headers' | 'body' | 'auth' | 'pre' | 'post' | 'docs'
@@ -57,6 +82,20 @@ export interface TabState {
   resTab: ResponseTab
 }
 
+/** A fresh draft: no file behind it, so it counts as unsaved from birth. */
+function newDraftTab(name?: string): TabState {
+  const request = blankRequest(name)
+  return {
+    path: DRAFT_PREFIX + request.id,
+    request,
+    // Never equals the serialised request, so a draft is always dirty.
+    saved: '',
+    running: false,
+    reqTab: 'params',
+    resTab: 'body'
+  }
+}
+
 export interface Toast {
   id: number
   kind: 'info' | 'error' | 'success'
@@ -76,6 +115,8 @@ export interface State {
   showEnvs: boolean
   showHelp: boolean
   showSettings: boolean
+  /** The Welcome tab, which sits alongside the request tabs. */
+  welcomeOpen: boolean
   /** Folder the import dialog will drop the new request into; null = closed. */
   importCurlInto: string | null
   sidebarView: SidebarView
@@ -109,6 +150,7 @@ const initialState: State = {
   showEnvs: false,
   showHelp: false,
   showSettings: false,
+  welcomeOpen: false,
   importCurlInto: null,
   sidebarView: 'tree',
   history: [],
@@ -143,6 +185,7 @@ type Action =
   | { type: 'patchRequest'; path: string; patch: Partial<FrapRequest> }
   | { type: 'retitleTab'; from: string; to: string; name: string }
   | { type: 'toggle'; key: 'showEnvs' | 'showHelp' | 'showSettings'; value?: boolean }
+  | { type: 'welcome'; open: boolean }
   | { type: 'importCurlInto'; dir: string | null }
   | { type: 'sidebarView'; view: SidebarView }
   | { type: 'history'; history: HistoryEntry[] }
@@ -171,7 +214,7 @@ function reducer(state: State, action: Action): State {
         environments: action.environments,
         activeEnv: action.activeEnv,
         tabs: [],
-        activeTab: null,
+        activeTab: state.welcomeOpen ? WELCOME_TAB : null,
         loading: false,
         diskChanged: false
       }
@@ -232,6 +275,12 @@ function reducer(state: State, action: Action): State {
       return { ...state, toasts: [...state.toasts, action.toast].slice(-4) }
     case 'dismissToast':
       return { ...state, toasts: state.toasts.filter((t) => t.id !== action.id) }
+    case 'welcome': {
+      if (action.open) return { ...state, welcomeOpen: true, activeTab: WELCOME_TAB }
+      // Closing the active Welcome tab falls back to the first request tab.
+      const activeTab = state.activeTab === WELCOME_TAB ? (state.tabs[0]?.path ?? null) : state.activeTab
+      return { ...state, welcomeOpen: false, activeTab }
+    }
     case 'importCurlInto':
       return { ...state, importCurlInto: action.dir }
     case 'sidebarView':
@@ -287,6 +336,11 @@ export interface Actions {
   reloadEnvs(): Promise<void>
   applyEnvResult(result: { config?: WorkspaceConfig; environments: EnvFileView[] }): void
   createRequest(parentDir: string): Promise<void>
+  /** Adds an unsaved request. Only reachable before a folder is chosen. */
+  newDraft(): void
+  /** Asks for a folder and writes every draft into it. */
+  saveDrafts(): Promise<void>
+  showWelcome(open: boolean): void
   createFolder(parentDir: string): Promise<void>
   rename(path: string, name: string): Promise<void>
   duplicate(path: string): Promise<void>
@@ -466,8 +520,9 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
   const persistTabs = useCallback(() => {
     if (!ref.current.root) return
     void api.setState({
-      openTabs: ref.current.tabs.map((t) => t.path),
-      activeTab: ref.current.activeTab
+      // Drafts have no path to restore, and Welcome is not a workspace tab.
+      openTabs: ref.current.tabs.map((t) => t.path).filter((p) => !isDraftPath(p)),
+      activeTab: ref.current.activeTab === WELCOME_TAB ? null : ref.current.activeTab
     })
   }, [])
 
@@ -509,6 +564,23 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
 
   const importCurlInternal = useCallback(
     async (dir: string, text: string, substitute: boolean, name?: string) => {
+      // With no folder there is nothing to write to, so the import becomes
+      // another draft rather than a file.
+      if (!ref.current.root) {
+        const parsed = await guard(() => api.parseCurl(text, substitute))
+        if (!parsed) return
+        const request = { ...parsed.request, ...(name?.trim() ? { name: name.trim() } : {}) }
+        const tab = newDraftTab()
+        dispatch({
+          type: 'openTab',
+          tab: { ...tab, request: { ...request, id: tab.request.id } }
+        })
+        dispatch({ type: 'importCurlInto', dir: null })
+        for (const warning of parsed.warnings) toast('info', warning)
+        toast('success', 'Imported from cURL')
+        return
+      }
+
       const result = await guard(() => api.importCurl(dir, text, substitute, name))
       if (!result) return
       dispatch({ type: 'importCurlInto', dir: null })
@@ -522,6 +594,45 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
     },
     [guard, openTabInternal, persistTabs, refresh, setCollapsed, toast]
   )
+
+  /**
+   * Gives the unsaved collection a home.
+   *
+   * Main asks for the folder, writes every draft into it and opens it as a
+   * workspace; the drafts are then reopened as the real files they became, so
+   * nothing the user was looking at is lost.
+   */
+  const saveDraftsInternal = useCallback(async () => {
+    const drafts = ref.current.tabs.filter((t) => isDraftPath(t.path))
+    if (!drafts.length) {
+      toast('info', 'Nothing to save yet - create a request first.')
+      return
+    }
+    // Remember which draft was in front, to land back on it afterwards.
+    const activeIndex = drafts.findIndex((t) => t.path === ref.current.activeTab)
+
+    const result = await guard(() => api.saveDrafts(drafts.map((t) => t.request)))
+    if (!result) return // the folder dialog was cancelled
+
+    dispatch({
+      type: 'workspace',
+      root: result.root,
+      config: result.config,
+      tree: result.tree,
+      environments: result.environments,
+      activeEnv: result.environments[0]?.name ?? null
+    })
+    const { recent } = await api.recentWorkspaces()
+    dispatch({ type: 'recent', recent })
+    void loadVariables()
+    void loadHistory()
+
+    for (const saved of result.paths) await openTabInternal(saved, false)
+    const landing = result.paths[activeIndex >= 0 ? activeIndex : 0]
+    if (landing) dispatch({ type: 'activeTab', path: landing })
+    setTimeout(persistTabs, 0)
+    toast('success', `Collection saved to ${result.root}`)
+  }, [guard, loadHistory, loadVariables, openTabInternal, persistTabs, toast])
 
   /** Shared tail of every paste: reveal the result and select it. */
   const afterPaste = useCallback(
@@ -572,6 +683,11 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
         dispatch({ type: 'patchTab', path, patch })
       },
       async save(path) {
+        // Nothing on disk yet: saving means choosing where the collection lives.
+        if (isDraftPath(path)) {
+          await saveDraftsInternal()
+          return
+        }
         const tab = ref.current.tabs.find((t) => t.path === path)
         if (!tab) return
         const ok = await guard(async () => {
@@ -649,12 +765,26 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
         void loadVariables()
       },
       async createRequest(parentDir) {
+        if (!ref.current.root) {
+          dispatch({ type: 'openTab', tab: newDraftTab() })
+          return
+        }
         const created = await guard(() => api.createRequest(parentDir))
         if (!created) return
         await refresh()
         await openTabInternal(created)
         setTimeout(persistTabs, 0)
       },
+      newDraft() {
+        dispatch({ type: 'openTab', tab: newDraftTab() })
+      },
+
+      saveDrafts: saveDraftsInternal,
+
+      showWelcome(open) {
+        dispatch({ type: 'welcome', open })
+      },
+
       async createFolder(parentDir) {
         const name = window.prompt('Folder name', 'New Folder')
         if (name === null) return
@@ -851,22 +981,26 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
       openTabInternal,
       persistTabs,
       refresh,
+      saveDraftsInternal,
       setCollapsed,
       toast
     ]
   )
 
-  // Boot: reopen the most recent workspace.
+  // Boot: no folder, ready to work.
   useEffect(() => {
     void (async () => {
-      const [{ recent, last }, layout] = await Promise.all([
+      const [{ recent }, layout] = await Promise.all([
         api.recentWorkspaces(),
         api.getLayout()
       ])
       dispatch({ type: 'recent', recent })
       dispatch({ type: 'layout', layout })
-      if (last && recent.some((entry) => entry.root === last)) await open(last)
-      else dispatch({ type: 'loading', value: false })
+      // Frap starts with no folder chosen: you can create requests and send
+      // them straight away, and pick where they live when you save. The
+      // Welcome tab offers the recent collections for the other case.
+      dispatch({ type: 'welcome', open: true })
+      dispatch({ type: 'loading', value: false })
     })()
     // Intentionally runs once on mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps

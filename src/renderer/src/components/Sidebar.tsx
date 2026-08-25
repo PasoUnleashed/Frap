@@ -8,7 +8,7 @@ import {
   type KeyboardEvent,
   type MouseEvent
 } from 'react'
-import { REQUEST_EXT, type TreeNode } from '@shared/types'
+import { REQUEST_EXT, isDraftPath, type TreeNode } from '@shared/types'
 import { api, type MenuItem } from '../api'
 import { isDirty, useStore } from '../store'
 import { HistoryList } from './HistoryList'
@@ -275,6 +275,89 @@ function Row({ row, filter, dragOver, setDragOver }: RowProps): JSX.Element {
 }
 
 /* ------------------------------------------------------------------ */
+/* Unsaved collection                                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The sidebar before a folder has been chosen.
+ *
+ * There is nothing on disk to scan, so the collection is exactly the drafts
+ * that are open. Folders, drag-and-drop and the clipboard need real files, so
+ * they are simply not offered here rather than half-working.
+ */
+function DraftSidebar(): JSX.Element {
+  const { state, actions } = useStore()
+  const drafts = state.tabs.filter((tab) => isDraftPath(tab.path))
+
+  return (
+    <aside className="sidebar">
+      <div className="sidebar-head">
+        <button className="primary" style={{ flex: 1 }} onClick={() => actions.newDraft()}>
+          New request
+        </button>
+        <button
+          title="Paste a cURL command as a request"
+          onClick={() => actions.openImportCurl('')}
+        >
+          ⤓
+        </button>
+      </div>
+
+      <div className="tree">
+        {drafts.length === 0 ? (
+          <div className="tree-empty">
+            Nothing yet.
+            <br />
+            <br />
+            Add a request and start sending. You choose where the collection
+            lives when you save it.
+          </div>
+        ) : (
+          drafts.map((tab) => (
+            <div
+              key={tab.path}
+              className={`tree-row${state.activeTab === tab.path ? ' open' : ''}`}
+              style={{ paddingLeft: 6 }}
+              onClick={() => actions.selectTab(tab.path)}
+              title={tab.request.url || tab.request.name}
+            >
+              <span className="caret" />
+              <span className={`method ${tab.request.method.toLowerCase()}`}>
+                {tab.request.method}
+              </span>
+              <span className="label unsaved">{tab.request.name}</span>
+              <span className="actions" onClick={(e) => e.stopPropagation()}>
+                <button
+                  className="ghost"
+                  title="Discard this request"
+                  onClick={() => void actions.closeTab(tab.path)}
+                >
+                  ×
+                </button>
+              </span>
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="sidebar-foot">
+        <span>
+          {drafts.length} unsaved request{drafts.length === 1 ? '' : 's'}
+        </span>
+        <span className="spacer" />
+        <button
+          disabled={drafts.length === 0}
+          title="Choose a folder for this collection (Ctrl+S)"
+          onClick={() => void actions.saveDrafts()}
+        >
+          Save…
+        </button>
+      </div>
+    </aside>
+  )
+}
+
+/* ------------------------------------------------------------------ */
 /* Sidebar                                                             */
 /* ------------------------------------------------------------------ */
 
@@ -490,6 +573,10 @@ export function Sidebar(): JSX.Element {
         break
     }
   }
+
+  // Before a folder is chosen there is no tree to scan and no history to
+  // show: the collection is whatever drafts are open.
+  if (!state.root) return <DraftSidebar />
 
   const showingTree = state.sidebarView === 'tree'
 

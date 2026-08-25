@@ -57,6 +57,9 @@ export const api = {
       config: WorkspaceConfig
       environments: EnvFileView[]
     }>,
+  /** Asks for a folder, writes every draft into it, and opens it. */
+  saveDrafts: (drafts: FrapRequest[]) =>
+    bridge.workspace.saveDrafts(drafts) as Promise<(OpenedWorkspace & { paths: string[] }) | null>,
   recentWorkspaces: () =>
     bridge.workspace.recent() as Promise<{ recent: RecentWorkspace[]; last: string | null }>,
   forgetWorkspace: (root: string) => bridge.workspace.forget(root),

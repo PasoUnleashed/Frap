@@ -11,6 +11,25 @@ Ships as a single portable executable for Windows, macOS and Linux.
 
 ---
 
+## Start typing, choose a folder later
+
+Frap opens with no folder selected. Hit **New request**, point it at a URL and
+send it — nothing has touched the disk yet, the way an unsaved file works in a
+code editor. Requests you have not saved are marked with a dot and listed in
+the sidebar.
+
+When the collection is worth keeping, **Ctrl+S** asks where it should live and
+writes every draft into that folder as its own `.frap.json`. The tabs you had
+open re-point to the real files, and from then on it is an ordinary Frap
+workspace: environments, history, folders, the lot.
+
+The Welcome tab sits alongside your request tabs rather than blocking them, and
+lists the collections you had open before. Close it like any other tab.
+
+A draft has no folder behind it, so it has no `.env` to read and nothing to
+record history against. Everything else — scripts, tests, variables set by
+scripts, copy as cURL — works exactly as it does in a saved collection.
+
 ## Why the file layout matters
 
 A collection is a folder:
@@ -198,7 +217,8 @@ the literal values.
 
 Per machine, in your app-data folder (or `frap-data` beside the portable exe):
 
-- **Recent workspaces**, and the one to reopen on launch. The chip in the
+- **Recent workspaces**. Frap does not reopen one on launch - it starts ready
+  to work instead - but the chip in the
   title bar names the collection you are in and drops down the last five, so
   hopping between a couple of APIs is one click. Anything with unsaved edits
   asks first, since switching closes every tab.

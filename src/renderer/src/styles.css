@@ -645,6 +645,15 @@ input[type='checkbox'] {
   color: #dfe7ff;
 }
 
+/* Pinned outside the scrolling strip, so it stays reachable however many
+   request tabs are open. */
+.welcome-tab {
+  flex: none;
+  min-width: 0;
+  padding-left: 12px;
+  border-right: 1px solid var(--border);
+}
+
 .tab {
   display: flex;
   align-items: center;
