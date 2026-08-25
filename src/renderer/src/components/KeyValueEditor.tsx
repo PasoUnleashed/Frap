@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState, type JSX } from 'react'
 import type { KeyValue } from '@shared/types'
+import { VariableInput } from './VariableInput'
 
 interface Props {
   rows: KeyValue[]
@@ -87,18 +88,16 @@ export function KeyValueEditor({
                 />
               </td>
               <td>
-                <input
-                  ref={register(index, 'key')}
-                  type="text"
+                <VariableInput
+                  inputRef={register(index, 'key')}
                   value={row.key}
                   placeholder={keyPlaceholder}
                   onChange={(e) => patch(index, { key: e.target.value })}
                 />
               </td>
               <td>
-                <input
-                  ref={register(index, 'value')}
-                  type="text"
+                <VariableInput
+                  inputRef={register(index, 'value')}
                   value={row.value}
                   placeholder={valuePlaceholder}
                   onChange={(e) => patch(index, { value: e.target.value })}

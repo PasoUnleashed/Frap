@@ -7,6 +7,7 @@ import { ResponsePane } from './components/ResponsePane'
 import { ScriptingHelp } from './components/ScriptingHelp'
 import { SettingsDialog } from './components/SettingsDialog'
 import { Sidebar } from './components/Sidebar'
+import { VariableInput } from './components/VariableInput'
 import { Welcome } from './components/Welcome'
 import { isDirty, useStore, type TabState } from './store'
 
@@ -175,11 +176,9 @@ function UrlBar({
         ))}
       </select>
 
-      <input
-        ref={urlRef}
-        type="text"
+      <VariableInput
+        inputRef={urlRef}
         className="url"
-        spellCheck={false}
         placeholder="{{BASE_URL}}/users/{{USER_ID}}"
         value={tab.request.url}
         onChange={(e) => actions.patchRequest(tab.path, { url: e.target.value })}

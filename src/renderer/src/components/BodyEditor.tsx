@@ -3,6 +3,7 @@ import type { BodyMode, FormField, RequestBody } from '@shared/types'
 import { api } from '../api'
 import { CodeEditor, type Language } from './CodeEditor'
 import { KeyValueEditor } from './KeyValueEditor'
+import { VariableInput } from './VariableInput'
 
 const MODES: Array<{ value: BodyMode; label: string }> = [
   { value: 'none', label: 'No body' },
@@ -67,8 +68,7 @@ function FormFields({
               />
             </td>
             <td>
-              <input
-                type="text"
+              <VariableInput
                 value={field.key}
                 placeholder="Field name"
                 onChange={(e) => patch(index, { key: e.target.value })}
@@ -86,8 +86,7 @@ function FormFields({
             </td>
             <td>
               <div style={{ display: 'flex' }}>
-                <input
-                  type="text"
+                <VariableInput
                   value={field.value}
                   placeholder={field.type === 'file' ? 'Path to a file' : 'Value'}
                   onChange={(e) => patch(index, { value: e.target.value })}
@@ -184,6 +183,7 @@ export function BodyEditor({ body, onChange }: Props): JSX.Element {
           language={LANGUAGE[body.mode] ?? 'text'}
           onChange={(text) => onChange({ ...body, text })}
           placeholder={'{\n  "hello": "{{NAME}}"\n}'}
+          variables
         />
       )}
 
@@ -194,6 +194,7 @@ export function BodyEditor({ body, onChange }: Props): JSX.Element {
             language="javascript"
             onChange={(text) => onChange({ ...body, text })}
             placeholder={'query {\n  viewer { id }\n}'}
+            variables
           />
           <div className="editor-toolbar">Variables (JSON)</div>
           <div style={{ height: 140, display: 'flex' }}>
@@ -202,6 +203,7 @@ export function BodyEditor({ body, onChange }: Props): JSX.Element {
               language="json"
               onChange={(graphqlVariables) => onChange({ ...body, graphqlVariables })}
               placeholder={'{ "id": "{{USER_ID}}" }'}
+              variables
             />
           </div>
         </div>
@@ -231,8 +233,7 @@ export function BodyEditor({ body, onChange }: Props): JSX.Element {
       {body.mode === 'binary' && (
         <div className="pane-body" style={{ padding: 14 }}>
           <div className="row">
-            <input
-              type="text"
+            <VariableInput
               className="mono"
               placeholder="Path to a file, relative to the workspace"
               value={body.filePath ?? ''}

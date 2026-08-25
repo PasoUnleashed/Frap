@@ -22,6 +22,7 @@ import type {
   FrapRequest,
   HistoryEntry,
   TreeNode,
+  VariableScope,
   WorkspaceConfig
 } from '@shared/types'
 import { api, type LayoutState } from './api'
@@ -65,6 +66,8 @@ export interface State {
   importCurlInto: string | null
   sidebarView: SidebarView
   history: HistoryEntry[]
+  /** Resolved {{variables}}, for chips and hover cards. */
+  variables: VariableScope
   layout: LayoutState
   /** Folders the user collapsed, keyed by absolute path. */
   collapsed: Record<string, boolean>
@@ -89,6 +92,7 @@ const initialState: State = {
   importCurlInto: null,
   sidebarView: 'tree',
   history: [],
+  variables: {},
   layout: { sidebarWidth: 280, responseHeight: 45 },
   collapsed: {},
   toasts: [],
@@ -119,6 +123,7 @@ type Action =
   | { type: 'importCurlInto'; dir: string | null }
   | { type: 'sidebarView'; view: SidebarView }
   | { type: 'history'; history: HistoryEntry[] }
+  | { type: 'variables'; variables: VariableScope }
   | { type: 'layout'; layout: LayoutState }
   | { type: 'collapsed'; collapsed: Record<string, boolean> }
   | { type: 'toast'; toast: Toast }
@@ -207,6 +212,8 @@ function reducer(state: State, action: Action): State {
       return { ...state, sidebarView: action.view }
     case 'history':
       return { ...state, history: action.history }
+    case 'variables':
+      return { ...state, variables: action.variables }
     case 'layout':
       return { ...state, layout: action.layout }
     case 'collapsed':
@@ -255,6 +262,7 @@ export interface Actions {
 
   setSidebarView(view: SidebarView): void
   refreshHistory(): Promise<void>
+  refreshVariables(): Promise<void>
   clearHistory(): Promise<void>
 
   setLayout(patch: Partial<LayoutState>): void
@@ -294,6 +302,7 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
     await guard(async () => {
       const { tree, environments } = await api.refresh()
       dispatch({ type: 'tree', tree, environments })
+      void loadVariables()
     })
   }, [guard])
 
@@ -330,6 +339,7 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
         collapsed: Object.fromEntries((opened.state.collapsedFolders ?? []).map((p) => [p, true]))
       })
       void loadHistory()
+      void loadVariables()
 
       // Reopen whatever was open last time, skipping files that have gone.
       for (const path of opened.state.openTabs ?? []) {
@@ -337,14 +347,21 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
       }
       if (opened.state.activeTab) dispatch({ type: 'activeTab', path: opened.state.activeTab })
     },
-    // openTabInternal and loadHistory are declared below but only called
-    // after render, so their bindings are initialised by then.
+    // openTabInternal, loadHistory and loadVariables are declared below but
+    // only called after render, so their bindings are initialised by then.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [guard]
   )
 
+  const loadVariables = useCallback(async () => {
+    try {
+      dispatch({ type: 'variables', variables: await api.variableScope() })
+    } catch {
+      // Chips simply render as unresolved if this fails.
+    }
+  }, [])
+
   const loadHistory = useCallback(async () => {
-    if (!ref.current.root) return
     try {
       dispatch({ type: 'history', history: await api.listHistory() })
     } catch {
@@ -448,6 +465,7 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
             }
           })
           void loadHistory()
+          void loadVariables()
           // A script may have rewritten the .env file, so pull it back in.
           if (result.envWrites.length) {
             const environments = await api.listEnvs()
@@ -478,12 +496,14 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
       async setActiveEnv(name) {
         dispatch({ type: 'activeEnv', name })
         await api.setState({ activeEnvironment: name })
+        void loadVariables()
       },
       async reloadEnvs() {
         await guard(async () => {
           const environments = await api.listEnvs()
           dispatch({ type: 'environments', environments })
         })
+        void loadVariables()
       },
       applyEnvResult(result) {
         dispatch({
@@ -491,6 +511,7 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
           environments: result.environments,
           config: result.config
         })
+        void loadVariables()
       },
       async createRequest(parentDir) {
         const created = await guard(() => api.createRequest(parentDir))
@@ -599,6 +620,7 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
       },
 
       refreshHistory: loadHistory,
+      refreshVariables: loadVariables,
 
       async clearHistory() {
         await guard(() => api.clearHistory())
@@ -624,7 +646,7 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
         }
       }
     }),
-    [guard, loadHistory, open, openTabInternal, persistTabs, refresh, toast]
+    [guard, loadHistory, loadVariables, open, openTabInternal, persistTabs, refresh, toast]
   )
 
   // Boot: reopen the most recent workspace.

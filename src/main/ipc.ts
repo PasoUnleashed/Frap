@@ -13,6 +13,7 @@ import {
   type ExecResult,
   type FrapRequest,
   type HistoryEntry,
+  type VariableScope,
   type TreeNode,
   type Workspace,
   type WorkspaceConfig
@@ -105,18 +106,34 @@ async function activeEnvPath(): Promise<string | null> {
 
 /**
  * The variables a request would resolve against right now: the active .env
- * file, overlaid with anything scripts have set this session.
+ * file, overlaid with anything scripts have set this session. Annotated with
+ * where each value came from, for the hover card in the editor.
  */
-async function activeScope(): Promise<Record<string, string>> {
+async function activeScopeDetailed(): Promise<VariableScope> {
   const { root } = requireWorkspace()
+  const state = await getWorkspaceState(root)
   const envPath = await activeEnvPath()
-  let scope: Record<string, string> = {}
+  const scope: VariableScope = {}
+
   if (envPath) {
     const { doc } = await readEnvDoc(envPath)
-    scope = expandEnv(envToObject(doc))
+    for (const [key, value] of Object.entries(expandEnv(envToObject(doc)))) {
+      scope[key] = {
+        value,
+        source: 'environment',
+        ...(state.activeEnvironment ? { environment: state.activeEnvironment } : {})
+      }
+    }
   }
-  for (const [key, value] of varsFor(root)) scope[key] = value
+  // Session variables win, exactly as they do when a request is sent.
+  for (const [key, value] of varsFor(root)) scope[key] = { value, source: 'session' }
   return scope
+}
+
+/** The same scope, flattened the way the interpolator wants it. */
+async function activeScope(): Promise<Record<string, string>> {
+  const detailed = await activeScopeDetailed()
+  return Object.fromEntries(Object.entries(detailed).map(([key, info]) => [key, info.value]))
 }
 
 /* ------------------------------------------------------------------ */
@@ -570,6 +587,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     for (const controller of inflight.values()) controller.abort()
     return true
   })
+
+  handle('vars:scope', (): Promise<VariableScope> => activeScopeDetailed())
 
   handle('vars:list', () => {
     const { root } = requireWorkspace()

@@ -88,6 +88,19 @@ export interface FolderMeta {
   scripts?: Partial<Scripts>
 }
 
+/** Where a `{{variable}}`'s value came from, for the hover card. */
+export type VariableSource = 'environment' | 'session'
+
+export interface VariableInfo {
+  value: string
+  source: VariableSource
+  /** The environment the value was read from, when it came from a file. */
+  environment?: string
+}
+
+/** Everything `{{name}}` could resolve to right now. */
+export type VariableScope = Record<string, VariableInfo>
+
 export interface EnvironmentRef {
   name: string
   /** Path to a `.env` file, relative to the workspace root (or absolute). */

@@ -1,5 +1,6 @@
 import type { JSX } from 'react'
 import type { Auth } from '@shared/types'
+import { VariableInput } from './VariableInput'
 
 interface Props {
   auth: Auth
@@ -27,8 +28,7 @@ export function AuthEditor({ auth, onChange }: Props): JSX.Element {
       {auth.type === 'bearer' && (
         <div style={field}>
           <label className="dim">Token</label>
-          <input
-            type="text"
+          <VariableInput
             className="mono"
             placeholder="{{TOKEN}}"
             value={auth.token ?? ''}
@@ -41,8 +41,7 @@ export function AuthEditor({ auth, onChange }: Props): JSX.Element {
         <>
           <div style={field}>
             <label className="dim">Username</label>
-            <input
-              type="text"
+            <VariableInput
               className="mono"
               value={auth.username ?? ''}
               onChange={(e) => onChange({ ...auth, username: e.target.value })}
@@ -50,8 +49,7 @@ export function AuthEditor({ auth, onChange }: Props): JSX.Element {
           </div>
           <div style={field}>
             <label className="dim">Password</label>
-            <input
-              type="text"
+            <VariableInput
               className="mono"
               placeholder="{{PASSWORD}}"
               value={auth.password ?? ''}
@@ -65,8 +63,7 @@ export function AuthEditor({ auth, onChange }: Props): JSX.Element {
         <>
           <div style={field}>
             <label className="dim">Key</label>
-            <input
-              type="text"
+            <VariableInput
               className="mono"
               placeholder="X-API-Key"
               value={auth.key ?? ''}
@@ -75,8 +72,7 @@ export function AuthEditor({ auth, onChange }: Props): JSX.Element {
           </div>
           <div style={field}>
             <label className="dim">Value</label>
-            <input
-              type="text"
+            <VariableInput
               className="mono"
               placeholder="{{API_KEY}}"
               value={auth.value ?? ''}

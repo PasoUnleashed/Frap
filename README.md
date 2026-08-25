@@ -135,6 +135,24 @@ Dynamic values, generated per send: `{{$uuid}}` `{{$timestamp}}`
 
 Press **F1** in the app for the same reference.
 
+## Variables are visible while you edit
+
+Anywhere a `{{variable}}` is interpolated — the URL, params, headers, auth
+fields and the body, including JSON and GraphQL — it is drawn as a chip:
+
+- **blue** when it resolves in the current environment
+- **red** when nothing will replace it
+- **purple** for the generated `{{$uuid}}`-style values
+
+Hover a chip to see what it resolves to right now and where the value came
+from. Right-click one to copy the value, copy the `{{name}}` itself, or jump
+straight to the environment editor. Switching environments recolours every
+chip immediately, so a request that will not resolve is obvious before you
+send it.
+
+Script editors deliberately have no chips: `{{...}}` is not interpolated in
+scripts, which read values through `frap.env.get()` instead.
+
 ## cURL, both directions
 
 **Copy as cURL** — right-click any request (or press `Ctrl+Shift+C`) and the
@@ -211,6 +229,7 @@ local and staging is not something your teammates see in a diff.
   exact bytes that were sent
 - Per-hop redirect handling, gzip/deflate/br/zstd decoding, per-workspace
   timeout and TLS-verification toggle
+- `{{variable}}` chips with hover values and copy-on-right-click
 - Copy any request as cURL, or import one by pasting a cURL command
 - Native right-click menus throughout the tree and the tab strip
 - Drag and drop to reorder and reorganise; ordering is stored per file
@@ -284,6 +303,7 @@ src/
     selfwrites.ts     tells our own disk writes from everyone else's
   preload/            the contextBridge, the renderer's only way out
   renderer/           React UI
+    variables.ts      finding and describing {{variables}} for the UI
 ```
 
 The renderer has no filesystem or network access of its own; everything goes

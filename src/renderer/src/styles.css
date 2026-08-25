@@ -873,6 +873,167 @@ input[type='checkbox'] {
 }
 
 /* ---------------------------------------------------------------- */
+/* {{variable}} chips                                                */
+/* ---------------------------------------------------------------- */
+
+/* The wrapper has to be invisible to layout: these inputs live in table
+   cells, flex rows and grid cells that were sized for a bare <input>. */
+.var-input {
+  position: relative;
+  display: block;
+  flex: 1;
+  min-width: 0;
+}
+
+/*
+ * The overlay paints chip backgrounds only - the glyphs still come from the
+ * real input on top of it. That way a chip costs no layout, the text cannot
+ * drift out of alignment, and the field keeps native selection and caret
+ * behaviour. It is pointer-transparent; hover and right-click are hit-tested
+ * by measuring the text instead.
+ */
+.var-mirror {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  white-space: pre;
+  color: transparent;
+  z-index: 0;
+}
+
+/* Every property that affects glyph position must match the input exactly. */
+.var-input > input,
+.var-mirror {
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: normal;
+  letter-spacing: normal;
+  padding: 5px 9px;
+  border: 1px solid transparent;
+}
+
+.var-input > input {
+  position: relative;
+  z-index: 1;
+  background: transparent;
+  border-color: var(--border);
+  border-radius: var(--radius);
+  width: 100%;
+}
+
+/* No padding on the chip: any would shift the text out from under it. */
+.var-chip {
+  border-radius: 3px;
+  background: rgba(91, 140, 255, 0.16);
+  box-shadow: 0 0 0 1px rgba(91, 140, 255, 0.4);
+}
+.var-chip.missing {
+  background: rgba(248, 81, 73, 0.14);
+  box-shadow: 0 0 0 1px rgba(248, 81, 73, 0.45);
+}
+.var-chip.dynamic {
+  background: rgba(163, 113, 247, 0.16);
+  box-shadow: 0 0 0 1px rgba(163, 113, 247, 0.4);
+}
+
+/* Table cells and the URL bar restyle their inputs; keep the mirror in step. */
+.kv .var-input > input,
+.kv .var-mirror {
+  border: none;
+  border-radius: 0;
+  padding: 6px 8px;
+}
+.kv .var-input > input:focus {
+  background: var(--panel-2);
+  box-shadow: inset 0 0 0 1px var(--accent-dim);
+}
+
+.urlbar .var-input > input,
+.urlbar .var-mirror {
+  font-size: 12.5px;
+  padding: 5px 9px;
+}
+
+/* The editor's inline version of the same chip. */
+.cm-var-chip {
+  border-radius: 3px;
+  background: rgba(91, 140, 255, 0.16);
+  box-shadow: 0 0 0 1px rgba(91, 140, 255, 0.4);
+}
+.cm-var-chip.missing {
+  background: rgba(248, 81, 73, 0.14);
+  box-shadow: 0 0 0 1px rgba(248, 81, 73, 0.45);
+}
+.cm-var-chip.dynamic {
+  background: rgba(163, 113, 247, 0.16);
+  box-shadow: 0 0 0 1px rgba(163, 113, 247, 0.4);
+}
+
+/* ---------------------------------------------------------------- */
+/* Variable hover card                                               */
+/* ---------------------------------------------------------------- */
+
+.var-card {
+  position: fixed;
+  z-index: 200;
+  max-width: 460px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--elevated);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  user-select: text;
+  display: grid;
+  gap: 3px;
+}
+/* CodeMirror positions its own tooltips. */
+.var-card.in-editor {
+  position: static;
+  box-shadow: none;
+  border: none;
+  background: transparent;
+}
+.cm-tooltip {
+  background: var(--elevated) !important;
+  border: 1px solid var(--border-strong) !important;
+  border-radius: var(--radius) !important;
+}
+.cm-tooltip .var-card {
+  max-width: 440px;
+}
+
+.var-card .name {
+  color: var(--accent);
+  font-weight: 600;
+}
+.var-card .value {
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 180px;
+  overflow: hidden;
+}
+.var-card .note {
+  color: var(--text-dim);
+}
+.var-card .note.missing {
+  color: var(--error);
+}
+.var-card .origin,
+.var-card .hint {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.var-card .hint {
+  margin-top: 2px;
+  border-top: 1px solid var(--border);
+  padding-top: 4px;
+}
+
+/* ---------------------------------------------------------------- */
 /* History                                                           */
 /* ---------------------------------------------------------------- */
 

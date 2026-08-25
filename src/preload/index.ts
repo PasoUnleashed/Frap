@@ -114,6 +114,7 @@ const api = {
     cancelAll: () => call<boolean>('exec:cancelAll')
   },
   vars: {
+    scope: () => call<unknown>('vars:scope'),
     list: () => call<Record<string, string>>('vars:list'),
     clear: () => call<boolean>('vars:clear')
   },

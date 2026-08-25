@@ -6,6 +6,8 @@ import { html } from '@codemirror/lang-html'
 import { xml } from '@codemirror/lang-xml'
 import { createTheme } from '@uiw/codemirror-themes'
 import { tags as t } from '@lezer/highlight'
+import { variableHighlighting } from '../codemirror-variables'
+import { useVariableTools } from './VariableInput'
 
 export type Language = 'javascript' | 'json' | 'html' | 'xml' | 'text'
 
@@ -62,6 +64,11 @@ interface Props {
   language?: Language
   readOnly?: boolean
   placeholder?: string
+  /**
+   * Draw {{variable}} chips. Only for fields the interpolator actually
+   * touches - not scripts, docs, response bodies or .env files.
+   */
+  variables?: boolean
 }
 
 /** Shared CodeMirror setup, themed to match the rest of the app. */
@@ -70,9 +77,18 @@ export function CodeEditor({
   onChange,
   language = 'text',
   readOnly = false,
-  placeholder
+  placeholder,
+  variables = false
 }: Props): JSX.Element {
-  const extensions = useMemo(() => extensionsFor(language), [language])
+  const { scope, openMenu } = useVariableTools()
+
+  const extensions = useMemo(() => {
+    const base = extensionsFor(language)
+    if (!variables) return base
+    // `scope` is in the deps so switching environment re-colours the chips
+    // even when the document itself has not changed.
+    return [...base, variableHighlighting({ getScope: () => scope, onContextMenu: openMenu })]
+  }, [language, variables, scope, openMenu])
 
   return (
     <div className="cm-host">

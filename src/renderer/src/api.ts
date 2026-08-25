@@ -8,6 +8,7 @@ import type {
   FrapRequest,
   HistoryEntry,
   TreeNode,
+  VariableScope,
   WorkspaceConfig
 } from '@shared/types'
 
@@ -109,6 +110,8 @@ export const api = {
   cancel: (runId: string) => bridge.exec.cancel(runId),
   cancelAll: () => bridge.exec.cancelAll(),
 
+  /** Everything {{name}} could resolve to right now, with provenance. */
+  variableScope: () => bridge.vars.scope() as Promise<VariableScope>,
   listVars: () => bridge.vars.list(),
   clearVars: () => bridge.vars.clear(),
 
