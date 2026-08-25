@@ -227,6 +227,18 @@ function reducer(state: State, action: Action): State {
 
 export const isDirty = (tab: TabState): boolean => JSON.stringify(tab.request) !== tab.saved
 
+/**
+ * Which response tab to open after a send.
+ *
+ * The body is what you nearly always want to look at. The exception is a
+ * response that has none - a 204, a HEAD, an empty 30x - where the body pane
+ * would just say "empty" and the headers are the interesting part. Failing
+ * tests are still obvious from the count on the Tests tab.
+ */
+function landingResponseTab(result: ExecResult): ResponseTab {
+  return result.response && result.response.size === 0 ? 'headers' : 'body'
+}
+
 export interface Actions {
   pickAndOpen(): Promise<void>
   open(root: string): Promise<void>
@@ -461,7 +473,7 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
               running: false,
               result,
               runId: undefined,
-              resTab: result.tests.length ? 'tests' : 'body'
+              resTab: landingResponseTab(result)
             }
           })
           void loadHistory()
