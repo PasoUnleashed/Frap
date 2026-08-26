@@ -1,4 +1,10 @@
-import { useEffect, useState, type JSX } from 'react'
+import {
+  useEffect,
+  useState,
+  type FocusEvent,
+  type JSX,
+  type KeyboardEvent
+} from 'react'
 import { api } from '../api'
 import { useStore } from '../store'
 import { CodeEditor } from './CodeEditor'
@@ -51,9 +57,30 @@ export function EnvironmentsDialog(): JSX.Element {
   const addEntry = async (): Promise<void> => {
     const key = newKey.trim()
     if (!key) return
-    await setValue(key, newValue)
+    // Clear first: the write is async, and a second commit racing in from
+    // blur would otherwise add the same key twice.
     setNewKey('')
     setNewValue('')
+    await setValue(key, newValue)
+  }
+
+  /**
+   * Commits when focus leaves the whole row, not merely the field.
+   *
+   * Tabbing from the key to the value has to stay in the same entry, but
+   * clicking away must not silently throw away what was typed - which is what
+   * every other key/value table in Frap gets right by promoting the trailing
+   * row as soon as you type in it.
+   */
+  const onNewRowBlur = (event: FocusEvent<HTMLTableRowElement>): void => {
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
+    void addEntry()
+  }
+
+  const commitOnEnter = (event: KeyboardEvent<HTMLInputElement>): void => {
+    if (event.key !== 'Enter') return
+    event.preventDefault()
+    void addEntry()
   }
 
   const saveRaw = async (): Promise<void> => {
@@ -277,7 +304,7 @@ export function EnvironmentsDialog(): JSX.Element {
                             </td>
                           </tr>
                         ))}
-                        <tr>
+                        <tr onBlur={onNewRowBlur}>
                           <td>
                             <input
                               type="text"
@@ -285,6 +312,7 @@ export function EnvironmentsDialog(): JSX.Element {
                               placeholder="NEW_KEY"
                               value={newKey}
                               onChange={(e) => setNewKey(e.target.value)}
+                              onKeyDown={commitOnEnter}
                             />
                           </td>
                           <td>
@@ -294,12 +322,17 @@ export function EnvironmentsDialog(): JSX.Element {
                               placeholder="value"
                               value={newValue}
                               onChange={(e) => setNewValue(e.target.value)}
-                              onKeyDown={(e) => e.key === 'Enter' && void addEntry()}
+                              onKeyDown={commitOnEnter}
                             />
                           </td>
                           <td />
                           <td className="tools">
-                            <button className="ghost" onClick={() => void addEntry()}>
+                            <button
+                              className="ghost"
+                              title="Add this key"
+                              disabled={!newKey.trim()}
+                              onClick={() => void addEntry()}
+                            >
                               +
                             </button>
                           </td>
@@ -307,8 +340,8 @@ export function EnvironmentsDialog(): JSX.Element {
                       </tbody>
                     </table>
                     <div className="kv-add faint">
-                      Editing a value here rewrites only that one line. Comments, ordering, quoting
-                      and line endings stay exactly as they are.
+                      Press Enter or click away to add a key. Editing a value rewrites only that
+                      one line - comments, ordering, quoting and line endings stay as they are.
                     </div>
                   </div>
                 ) : (
