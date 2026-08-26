@@ -1,6 +1,6 @@
 {
   "name": "frap",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Frap - a git-friendly API testing client. Collections are plain JSON files on disk.",
   "main": "./out/main/index.js",
   "author": "Faisal Alsajjan",
