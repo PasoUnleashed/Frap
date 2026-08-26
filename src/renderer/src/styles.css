@@ -1380,6 +1380,28 @@ textarea.curl-input {
 .env-list .item.active {
   background: var(--elevated);
 }
+/* Inline "new environment" form, in place of a prompt() Electron lacks. */
+.env-new {
+  display: grid;
+  gap: 5px;
+  padding: 9px;
+  margin: 4px 0;
+  border: 1px solid var(--accent-dim);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+}
+.env-new label {
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+.env-new .row {
+  margin-top: 3px;
+}
+.env-new button {
+  padding: 3px 9px;
+  font-size: 12px;
+}
+
 .env-list .item .file {
   font-size: 10.5px;
   color: var(--text-faint);

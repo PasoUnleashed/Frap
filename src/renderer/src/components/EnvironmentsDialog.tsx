@@ -3,6 +3,13 @@ import { api } from '../api'
 import { useStore } from '../store'
 import { CodeEditor } from './CodeEditor'
 
+/** `.env` for the default one, `.env.staging` for the rest. */
+const suggestedFile = (name: string): string => {
+  const clean = name.trim()
+  if (!clean || clean.toLowerCase() === 'local' || clean.toLowerCase() === 'default') return '.env'
+  return `.env.${clean}`
+}
+
 /**
  * Environments are plain .env files. This panel edits them either as a table
  * or as raw text; both paths go through the comment-preserving writer, so a
@@ -15,6 +22,12 @@ export function EnvironmentsDialog(): JSX.Element {
   const [draft, setDraft] = useState<string | null>(null)
   const [newKey, setNewKey] = useState('')
   const [newValue, setNewValue] = useState('')
+  /**
+   * The inline "new environment" form. Electron has no `window.prompt`, and a
+   * modal on top of a modal to ask for two strings would be worse than asking
+   * for them where the list already is.
+   */
+  const [creating, setCreating] = useState<{ name: string; file: string } | null>(null)
 
   const env = state.environments.find((e) => e.name === selected) ?? state.environments[0] ?? null
 
@@ -55,14 +68,27 @@ export function EnvironmentsDialog(): JSX.Element {
     }
   }
 
-  const createFile = async (): Promise<void> => {
-    const name = window.prompt('Environment name (e.g. staging)', 'staging')
-    if (!name) return
-    const file = window.prompt('File name, relative to the workspace', `.env.${name}`)
-    if (!file) return
+  /**
+   * Adopts the first environment as the active one.
+   *
+   * Adding an environment to a workspace that had none is always because you
+   * want to use it; leaving it inactive means every {{variable}} stays
+   * unresolved and the panel looks broken.
+   */
+  const adoptIfFirst = (name: string): void => {
+    if (!state.activeEnv) void actions.setActiveEnv(name)
+  }
+
+  const confirmCreate = async (): Promise<void> => {
+    if (!creating) return
+    const name = creating.name.trim()
+    const file = creating.file.trim()
+    if (!name || !file) return
     try {
       actions.applyEnvResult(await api.createEnvFile(file, name))
       setSelected(name)
+      setCreating(null)
+      adoptIfFirst(name)
     } catch (err) {
       actions.toast('error', (err as Error).message)
     }
@@ -71,7 +97,13 @@ export function EnvironmentsDialog(): JSX.Element {
   const linkFile = async (): Promise<void> => {
     try {
       const result = await api.addEnv()
-      if (result) actions.applyEnvResult(result)
+      if (!result) return
+      actions.applyEnvResult(result)
+      const added = result.environments[result.environments.length - 1]
+      if (added) {
+        setSelected(added.name)
+        adoptIfFirst(added.name)
+      }
     } catch (err) {
       actions.toast('error', (err as Error).message)
     }
@@ -107,7 +139,57 @@ export function EnvironmentsDialog(): JSX.Element {
                 </span>
               </div>
             ))}
-            {state.environments.length === 0 && (
+            {creating && (
+              <div className="env-new">
+                <label>Name</label>
+                <input
+                  type="text"
+                  autoFocus
+                  placeholder="local"
+                  value={creating.name}
+                  onChange={(e) => {
+                    const name = e.target.value
+                    setCreating((prev) =>
+                      prev
+                        ? {
+                            name,
+                            // Keep the file name in step until it is edited by hand.
+                            file: prev.file === suggestedFile(prev.name) ? suggestedFile(name) : prev.file
+                          }
+                        : prev
+                    )
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void confirmCreate()
+                    if (e.key === 'Escape') setCreating(null)
+                  }}
+                />
+                <label>File</label>
+                <input
+                  type="text"
+                  className="mono"
+                  placeholder=".env"
+                  value={creating.file}
+                  onChange={(e) =>
+                    setCreating((prev) => (prev ? { ...prev, file: e.target.value } : prev))
+                  }
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void confirmCreate()
+                    if (e.key === 'Escape') setCreating(null)
+                  }}
+                />
+                <div className="row">
+                  <button className="primary" onClick={() => void confirmCreate()}>
+                    Create
+                  </button>
+                  <button className="ghost" onClick={() => setCreating(null)}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {state.environments.length === 0 && !creating && (
               <div className="faint" style={{ padding: 12, lineHeight: 1.7 }}>
                 No environments yet. Create a <code className="mono">.env</code> file or link an
                 existing one.
@@ -259,7 +341,12 @@ export function EnvironmentsDialog(): JSX.Element {
         </div>
 
         <footer>
-          <button onClick={() => void createFile()}>New .env file</button>
+          <button
+            onClick={() => setCreating({ name: 'local', file: suggestedFile('local') })}
+            disabled={creating !== null}
+          >
+            New .env file
+          </button>
           <button onClick={() => void linkFile()}>Link existing file</button>
           {env && (
             <button

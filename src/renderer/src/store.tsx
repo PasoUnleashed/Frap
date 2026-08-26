@@ -786,10 +786,14 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
       },
 
       async createFolder(parentDir) {
-        const name = window.prompt('Folder name', 'New Folder')
-        if (name === null) return
-        await guard(() => api.createFolder(parentDir, name))
+        // No `window.prompt` in Electron, and asking in a modal would be worse
+        // than what New Request already does: create it, then rename in place.
+        const created = await guard(() => api.createFolder(parentDir, 'New Folder'))
+        if (!created) return
+        setCollapsed(parentDir, false)
         await refresh()
+        dispatch({ type: 'selected', path: created })
+        dispatch({ type: 'renaming', path: created })
       },
       async rename(path, name) {
         const next = await guard(() => api.rename(path, name))
@@ -1005,6 +1009,29 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
     // Intentionally runs once on mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  /**
+   * Surfaces anything that escaped a handler.
+   *
+   * A button whose click handler throws does nothing at all, with no hint why
+   * - which is exactly how the missing `window.prompt` hid for so long. An
+   * error the user can see is one they can report.
+   */
+  useEffect(() => {
+    const onError = (event: ErrorEvent): void => {
+      toast('error', event.message || 'Something went wrong')
+    }
+    const onRejection = (event: PromiseRejectionEvent): void => {
+      const reason: unknown = event.reason
+      toast('error', reason instanceof Error ? reason.message : String(reason))
+    }
+    window.addEventListener('error', onError)
+    window.addEventListener('unhandledrejection', onRejection)
+    return () => {
+      window.removeEventListener('error', onError)
+      window.removeEventListener('unhandledrejection', onRejection)
+    }
+  }, [toast])
 
   // The watcher tells us when git or another editor touched the folder.
   useEffect(
