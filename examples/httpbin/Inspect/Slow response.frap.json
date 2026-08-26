@@ -3,7 +3,7 @@
   "id": "99351d60-95a3-4426-9e78-86b7f81c9178",
   "name": "Slow response",
   "order": 2,
-  "method": "GET",
+  "method": "DELETE",
   "url": "{{BASE_URL}}/delay/2",
   "scripts": {
     "postResponse": "frap.test('answered within 10 seconds', () => {\n  frap.expect(frap.response.time).toBeLessThan(10000)\n})"
