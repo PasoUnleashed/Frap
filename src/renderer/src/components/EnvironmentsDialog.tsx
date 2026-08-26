@@ -1,5 +1,7 @@
 import {
   useEffect,
+  useLayoutEffect,
+  useRef,
   useState,
   type FocusEvent,
   type JSX,
@@ -8,6 +10,15 @@ import {
 import { api } from '../api'
 import { useStore } from '../store'
 import { CodeEditor } from './CodeEditor'
+
+/** A row you have started typing but not finished; not yet in the file. */
+interface Draft {
+  id: string
+  key: string
+  value: string
+}
+
+type DraftField = 'key' | 'value'
 
 /** `.env` for the default one, `.env.staging` for the rest. */
 const suggestedFile = (name: string): string => {
@@ -26,8 +37,11 @@ export function EnvironmentsDialog(): JSX.Element {
   const [selected, setSelected] = useState<string | null>(state.activeEnv)
   const [mode, setMode] = useState<'table' | 'raw'>('table')
   const [draft, setDraft] = useState<string | null>(null)
-  const [newKey, setNewKey] = useState('')
-  const [newValue, setNewValue] = useState('')
+  const [drafts, setDrafts] = useState<Draft[]>([])
+  const inputs = useRef(new Map<string, HTMLInputElement>())
+  const [focusAfterAdd, setFocusAfterAdd] = useState<{ index: number; field: DraftField } | null>(
+    null
+  )
   /**
    * The inline "new environment" form. Electron has no `window.prompt`, and a
    * modal on top of a modal to ask for two strings would be worse than asking
@@ -38,49 +52,95 @@ export function EnvironmentsDialog(): JSX.Element {
   const env = state.environments.find((e) => e.name === selected) ?? state.environments[0] ?? null
 
   useEffect(() => {
-    // Switching files discards an unsaved raw draft rather than carrying it over.
+    // Switching files starts clean: a half-typed row belongs to the file it
+    // was started in, and the raw editor's draft likewise.
     setDraft(null)
+    setDrafts([])
+    inputs.current.clear()
   }, [env?.name])
 
   const close = (): void => actions.toggle('showEnvs', false)
 
-  const setValue = async (key: string, value: string | null): Promise<void> => {
-    if (!env) return
+  /** Returns whether the file was actually written. */
+  const setValue = async (key: string, value: string | null): Promise<boolean> => {
+    if (!env) return false
     try {
       const environments = await api.setEnvValue(env.name, key, value)
       actions.applyEnvResult({ environments })
+      return true
     } catch (err) {
       actions.toast('error', (err as Error).message)
+      return false
     }
   }
 
-  const addEntry = async (): Promise<void> => {
-    const key = newKey.trim()
-    if (!key) return
-    // Clear first: the write is async, and a second commit racing in from
-    // blur would otherwise add the same key twice.
-    setNewKey('')
-    setNewValue('')
-    await setValue(key, newValue)
+  const cellKey = (index: number, field: DraftField): string => `${index}:${field}`
+
+  const register =
+    (index: number, field: DraftField) =>
+    (element: HTMLInputElement | null): void => {
+      if (element) inputs.current.set(cellKey(index, field), element)
+      else inputs.current.delete(cellKey(index, field))
+    }
+
+  /**
+   * Typing in the trailing row promotes it to a real one and the caret has to
+   * follow, otherwise the first character lands in the new row while you carry
+   * on typing into the empty placeholder below it.
+   *
+   * Layout effect rather than a plain effect: focus moves before the browser
+   * paints, so a fast typist never sees or types into the wrong cell.
+   */
+  useLayoutEffect(() => {
+    if (!focusAfterAdd) return
+    const element = inputs.current.get(cellKey(focusAfterAdd.index, focusAfterAdd.field))
+    if (element) {
+      element.focus()
+      const end = element.value.length
+      element.setSelectionRange(end, end)
+    }
+    setFocusAfterAdd(null)
+  }, [focusAfterAdd, drafts])
+
+  const promote = (field: DraftField, text: string): void => {
+    setDrafts((prev) => [...prev, { id: crypto.randomUUID(), key: '', value: '', [field]: text }])
+    setFocusAfterAdd({ index: drafts.length, field })
+  }
+
+  const patchDraft = (id: string, changes: Partial<Draft>): void =>
+    setDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, ...changes } : d)))
+
+  const dropDraft = (id: string): void => {
+    inputs.current.clear()
+    setDrafts((prev) => prev.filter((d) => d.id !== id))
   }
 
   /**
-   * Commits when focus leaves the whole row, not merely the field.
+   * Writes a started row to the file once it is finished with.
    *
-   * Tabbing from the key to the value has to stay in the same entry, but
-   * clicking away must not silently throw away what was typed - which is what
-   * every other key/value table in Frap gets right by promoting the trailing
-   * row as soon as you type in it.
+   * A row with no key cannot be written, so it simply stays put rather than
+   * being thrown away behind your back.
    */
-  const onNewRowBlur = (event: FocusEvent<HTMLTableRowElement>): void => {
+  const commitDraft = async (draft: Draft): Promise<void> => {
+    const key = draft.key.trim()
+    if (!key) return
+    // Only once the file is written: a failed write must not take what was
+    // typed with it. The row and the real entry never coexist, because the
+    // entry list only updates when the write lands.
+    if (await setValue(key, draft.value)) dropDraft(draft.id)
+  }
+
+  /** Tabbing between the two cells stays in the row; leaving it commits. */
+  const onDraftBlur = (event: FocusEvent<HTMLTableRowElement>, draft: Draft): void => {
     if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
-    void addEntry()
+    void commitDraft(draft)
   }
 
   const commitOnEnter = (event: KeyboardEvent<HTMLInputElement>): void => {
     if (event.key !== 'Enter') return
     event.preventDefault()
-    void addEntry()
+    // Blur so the row's own handler does the commit, in one place.
+    event.currentTarget.blur()
   }
 
   const saveRaw = async (): Promise<void> => {
@@ -304,44 +364,76 @@ export function EnvironmentsDialog(): JSX.Element {
                             </td>
                           </tr>
                         ))}
-                        <tr onBlur={onNewRowBlur}>
+                        {/* Rows you have started but not finished. They are
+                            written to the file when you leave them. */}
+                        {drafts.map((draft, index) => (
+                          <tr key={draft.id} onBlur={(e) => onDraftBlur(e, draft)}>
+                            <td>
+                              <input
+                                ref={register(index, 'key')}
+                                type="text"
+                                className="mono"
+                                placeholder="NEW_KEY"
+                                value={draft.key}
+                                onChange={(e) => patchDraft(draft.id, { key: e.target.value })}
+                                onKeyDown={commitOnEnter}
+                              />
+                            </td>
+                            <td>
+                              <input
+                                ref={register(index, 'value')}
+                                type="text"
+                                className="mono"
+                                placeholder="value"
+                                value={draft.value}
+                                onChange={(e) => patchDraft(draft.id, { value: e.target.value })}
+                                onKeyDown={commitOnEnter}
+                              />
+                            </td>
+                            <td className="faint" style={{ padding: '6px 8px' }}>
+                              {draft.key.trim() ? '' : 'needs a key'}
+                            </td>
+                            <td className="tools">
+                              <button
+                                className="ghost"
+                                title="Discard this row"
+                                onClick={() => dropDraft(draft.id)}
+                              >
+                                ×
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+
+                        {/* The placeholder. Never part of `drafts`, so an
+                            untouched row is never written to the file. */}
+                        <tr>
                           <td>
                             <input
                               type="text"
                               className="mono"
+                              value=""
                               placeholder="NEW_KEY"
-                              value={newKey}
-                              onChange={(e) => setNewKey(e.target.value)}
-                              onKeyDown={commitOnEnter}
+                              onChange={(e) => promote('key', e.target.value)}
                             />
                           </td>
                           <td>
                             <input
                               type="text"
                               className="mono"
+                              value=""
                               placeholder="value"
-                              value={newValue}
-                              onChange={(e) => setNewValue(e.target.value)}
-                              onKeyDown={commitOnEnter}
+                              onChange={(e) => promote('value', e.target.value)}
                             />
                           </td>
                           <td />
-                          <td className="tools">
-                            <button
-                              className="ghost"
-                              title="Add this key"
-                              disabled={!newKey.trim()}
-                              onClick={() => void addEntry()}
-                            >
-                              +
-                            </button>
-                          </td>
+                          <td className="tools" />
                         </tr>
                       </tbody>
                     </table>
                     <div className="kv-add faint">
-                      Press Enter or click away to add a key. Editing a value rewrites only that
-                      one line - comments, ordering, quoting and line endings stay as they are.
+                      A new key is written when you leave its row. Editing a value rewrites only
+                      that one line - comments, ordering, quoting and line endings stay as they are.
                     </div>
                   </div>
                 ) : (
