@@ -5,7 +5,13 @@
 import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
 import { randomBytes } from 'node:crypto'
-import type { FrapRequest, KeyValue } from '../shared/types.ts'
+import type {
+  Auth,
+  FolderScope,
+  FrapRequest,
+  InheritFlags,
+  KeyValue
+} from '../shared/types.ts'
 import { interpolate } from './interpolate.ts'
 import type { PreparedRequest } from './http.ts'
 
@@ -45,6 +51,57 @@ export interface PrepareContext {
    * drift from package.json.
    */
   userAgent?: string
+  /**
+   * The folders this request sits in, outermost first. Each contributes
+   * headers and, when the request inherits, auth.
+   */
+  folders?: FolderScope[]
+}
+
+/**
+ * The folders that still contribute one property, after any barrier.
+ *
+ * Turning inheritance off for a property makes that node the starting point:
+ * everything above it is discarded, and the node itself still counts. The
+ * request can be the barrier too, in which case no folder contributes.
+ */
+export function contributingFolders(
+  folders: FolderScope[],
+  request: FrapRequest,
+  property: keyof InheritFlags
+): FolderScope[] {
+  if (!request.inherit[property]) return []
+  for (let i = folders.length - 1; i >= 0; i--) {
+    if (!folders[i].meta.inherit[property]) return folders.slice(i)
+  }
+  return folders
+}
+
+/** Sets a header, replacing any that differs only by case. */
+function setHeader(headers: Record<string, string>, name: string, value: string): void {
+  const lower = name.toLowerCase()
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === lower) delete headers[key]
+  }
+  headers[name] = value
+}
+
+/**
+ * The auth a request actually sends.
+ *
+ * A request that names its own auth uses it. One set to `inherit` - the
+ * default - takes the nearest enclosing folder that names one; a folder set
+ * explicitly to `none` stops the search, which is how a public endpoint
+ * inside an authenticated folder opts out.
+ */
+export function effectiveAuth(req: FrapRequest, folders: FolderScope[] = []): Auth {
+  if (req.auth.type !== 'inherit') return req.auth
+  const contributing = contributingFolders(folders, req, 'auth')
+  for (let i = contributing.length - 1; i >= 0; i--) {
+    const auth = contributing[i].meta.auth
+    if (auth.type !== 'inherit') return auth
+  }
+  return { type: 'none' }
 }
 
 /** The mutable request shape scripts see as `frap.request`. */
@@ -89,23 +146,29 @@ export function toMutable(req: FrapRequest, ctx: PrepareContext): MutableRequest
     url += (url.includes('?') ? '&' : '?') + query
   }
 
+  // Folder headers first, outermost to innermost, then the request's own:
+  // the nearest definition of a header name wins.
   const headers: Record<string, string> = {}
-  for (const h of enabled(req.headers)) headers[sub(h.key)] = sub(h.value)
+  for (const folder of contributingFolders(ctx.folders ?? [], req, 'headers')) {
+    for (const h of enabled(folder.meta.headers)) setHeader(headers, sub(h.key), sub(h.value))
+  }
+  for (const h of enabled(req.headers)) setHeader(headers, sub(h.key), sub(h.value))
 
-  switch (req.auth.type) {
+  const auth = effectiveAuth(req, ctx.folders)
+  switch (auth.type) {
     case 'bearer':
-      headers.Authorization = `Bearer ${sub(req.auth.token ?? '')}`
+      headers.Authorization = `Bearer ${sub(auth.token ?? '')}`
       break
     case 'basic': {
-      const pair = `${sub(req.auth.username ?? '')}:${sub(req.auth.password ?? '')}`
+      const pair = `${sub(auth.username ?? '')}:${sub(auth.password ?? '')}`
       headers.Authorization = `Basic ${Buffer.from(pair, 'utf8').toString('base64')}`
       break
     }
     case 'apikey': {
-      const key = sub(req.auth.key ?? '')
-      const value = sub(req.auth.value ?? '')
+      const key = sub(auth.key ?? '')
+      const value = sub(auth.value ?? '')
       if (key) {
-        if (req.auth.in === 'query') url += (url.includes('?') ? '&' : '?') +
+        if (auth.in === 'query') url += (url.includes('?') ? '&' : '?') +
           `${encodeURIComponent(key)}=${encodeURIComponent(value)}`
         else headers[key] = value
       }

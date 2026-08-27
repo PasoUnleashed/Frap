@@ -117,7 +117,9 @@ test('a partial hand-written file still loads', async () => {
   const request = await readRequest(file)
   assert.equal(request.method, 'DELETE')
   assert.equal(request.name, 'Minimal')
-  assert.equal(request.auth.type, 'none')
+  // A request that says nothing about auth takes its folder's, which for a
+  // request with no folder settings above it resolves to none.
+  assert.equal(request.auth.type, 'inherit')
   assert.deepEqual(request.params, [])
   assert.ok(request.id, 'an id is generated for files that lack one')
 })

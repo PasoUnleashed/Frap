@@ -18,12 +18,17 @@ import {
 } from 'react'
 import {
   DRAFT_PREFIX,
-  FILE_FORMAT,
+  FORMAT_VERSION,
+  INHERIT_ALL,
   REQUEST_EXT,
   WELCOME_TAB,
+  FOLDER_TAB_PREFIX,
+  folderTabPath,
   isDraftPath,
+  isFolderTabPath,
   type EnvFileView,
   type ExecResult,
+  type FolderMeta,
   type FrapRequest,
   type HistoryEntry,
   type RecentWorkspace,
@@ -46,7 +51,7 @@ const labelOf = (target: string): string => {
  */
 function blankRequest(name = 'New Request'): FrapRequest {
   return {
-    frap: FILE_FORMAT,
+    frap: FORMAT_VERSION,
     id: crypto.randomUUID(),
     name,
     order: 0,
@@ -54,9 +59,10 @@ function blankRequest(name = 'New Request'): FrapRequest {
     url: '',
     params: [],
     headers: [],
-    auth: { type: 'none' },
+    auth: { type: 'inherit' },
     body: { mode: 'none' },
-    scripts: { preRequest: '', postResponse: '' }
+    scripts: { preRequest: '', postResponse: '' },
+    inherit: { ...INHERIT_ALL }
   }
 }
 
@@ -70,11 +76,19 @@ export interface NodeClip {
   mode: 'copy' | 'cut'
 }
 
-export interface TabState {
+/** Which panel of a folder's settings is showing. */
+export type FolderSection = 'headers' | 'auth' | 'pre' | 'post' | 'docs'
+
+interface TabBase {
+  /** Identity, and where it goes on disk. */
   path: string
-  request: FrapRequest
   /** The last state written to disk, for the dirty indicator. */
   saved: string
+}
+
+export interface RequestTabState extends TabBase {
+  kind: 'request'
+  request: FrapRequest
   result?: ExecResult
   running: boolean
   runId?: string
@@ -82,10 +96,32 @@ export interface TabState {
   resTab: ResponseTab
 }
 
+/**
+ * A folder's settings, open as a tab.
+ *
+ * The path carries a `folder:` prefix so it can never collide with a request
+ * file and so a reopened session knows what it is looking at - the same trick
+ * drafts use.
+ */
+export interface FolderTabState extends TabBase {
+  kind: 'folder'
+  /** The folder itself, without the tab prefix. */
+  folder: string
+  name: string
+  meta: FolderMeta
+  section: FolderSection
+}
+
+export type TabState = RequestTabState | FolderTabState
+
+/** Narrows to the request tabs, which is what most of the app cares about. */
+export const isRequestTab = (tab: TabState): tab is RequestTabState => tab.kind === 'request'
+
 /** A fresh draft: no file behind it, so it counts as unsaved from birth. */
-function newDraftTab(name?: string): TabState {
+function newDraftTab(name?: string): RequestTabState {
   const request = blankRequest(name)
   return {
+    kind: 'request',
     path: DRAFT_PREFIX + request.id,
     request,
     // Never equals the serialised request, so a draft is always dirty.
@@ -250,20 +286,26 @@ function reducer(state: State, action: Action): State {
     case 'patchTab':
       return {
         ...state,
-        tabs: state.tabs.map((t) => (t.path === action.path ? { ...t, ...action.patch } : t))
+        // The cast is safe by construction: a patch is only ever built by
+        // code that has already narrowed the tab it is patching.
+        tabs: state.tabs.map((t) =>
+          t.path === action.path ? ({ ...t, ...action.patch } as TabState) : t
+        )
       }
     case 'patchRequest':
       return {
         ...state,
         tabs: state.tabs.map((t) =>
-          t.path === action.path ? { ...t, request: { ...t.request, ...action.patch } } : t
+          t.path === action.path && isRequestTab(t)
+            ? { ...t, request: { ...t.request, ...action.patch } }
+            : t
         )
       }
     case 'retitleTab':
       return {
         ...state,
         tabs: state.tabs.map((t) =>
-          t.path === action.from
+          t.path === action.from && isRequestTab(t)
             ? { ...t, path: action.to, request: { ...t.request, name: action.name } }
             : t
         ),
@@ -306,7 +348,8 @@ function reducer(state: State, action: Action): State {
   }
 }
 
-export const isDirty = (tab: TabState): boolean => JSON.stringify(tab.request) !== tab.saved
+export const isDirty = (tab: TabState): boolean =>
+  JSON.stringify(isRequestTab(tab) ? tab.request : tab.meta) !== tab.saved
 
 /**
  * Which response tab to open after a send.
@@ -341,6 +384,9 @@ export interface Actions {
   /** Asks for a folder and writes every draft into it. */
   saveDrafts(): Promise<void>
   showWelcome(open: boolean): void
+
+  /** Opens a folder's settings as a tab. Pass the workspace root for the collection. */
+  openFolderSettings(folder: string, name: string): Promise<void>
   createFolder(parentDir: string): Promise<void>
   rename(path: string, name: string): Promise<void>
   duplicate(path: string): Promise<void>
@@ -448,7 +494,9 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
       // without a word. At boot there are no tabs, so this never fires there.
       const dirty = ref.current.tabs.filter(isDirty)
       if (dirty.length) {
-        const names = dirty.map((t) => `  • ${t.request.name}`).join('\n')
+        const names = dirty
+          .map((t) => `  • ${isRequestTab(t) ? t.request.name : t.name}`)
+          .join('\n')
         const ok = window.confirm(
           `${dirty.length} request${dirty.length === 1 ? ' has' : 's have'} unsaved changes:\n\n` +
             `${names}\n\nSwitch workspace and discard them?`
@@ -489,9 +537,14 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
       void loadHistory()
       void loadVariables()
 
-      // Reopen whatever was open last time, skipping files that have gone.
+      // Reopen whatever was open last time, skipping anything that has gone.
       for (const path of opened.state.openTabs ?? []) {
-        await openTabInternal(path, false)
+        if (isFolderTabPath(path)) {
+          const folder = folderTabPath(path)
+          await openFolderTab(folder, folder.split(/[\/]/).pop() ?? folder, false)
+        } else {
+          await openTabInternal(path, false)
+        }
       }
       if (opened.state.activeTab) dispatch({ type: 'activeTab', path: opened.state.activeTab })
     },
@@ -537,6 +590,7 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
         dispatch({
           type: 'openTab',
           tab: {
+            kind: 'request',
             path,
             request,
             saved: JSON.stringify(request),
@@ -570,10 +624,11 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
         const parsed = await guard(() => api.parseCurl(text, substitute))
         if (!parsed) return
         const request = { ...parsed.request, ...(name?.trim() ? { name: name.trim() } : {}) }
-        const tab = newDraftTab()
+        const draft = newDraftTab()
         dispatch({
           type: 'openTab',
-          tab: { ...tab, request: { ...request, id: tab.request.id } }
+          // Keep the draft's own id: it is what the tab is addressed by.
+          tab: { ...draft, request: { ...request, id: draft.request.id } }
         })
         dispatch({ type: 'importCurlInto', dir: null })
         for (const warning of parsed.warnings) toast('info', warning)
@@ -603,7 +658,9 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
    * nothing the user was looking at is lost.
    */
   const saveDraftsInternal = useCallback(async () => {
-    const drafts = ref.current.tabs.filter((t) => isDraftPath(t.path))
+    const drafts = ref.current.tabs.filter(
+      (t): t is RequestTabState => isRequestTab(t) && isDraftPath(t.path)
+    )
     if (!drafts.length) {
       toast('info', 'Nothing to save yet - create a request first.')
       return
@@ -633,6 +690,52 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
     setTimeout(persistTabs, 0)
     toast('success', `Collection saved to ${result.root}`)
   }, [guard, loadHistory, loadVariables, openTabInternal, persistTabs, toast])
+
+  /**
+   * Opens a folder's settings as a tab, or brings it forward if it is already
+   * open. Reading happens here rather than in the pane so that reopening a
+   * saved session can restore the tab the same way.
+   */
+  const openFolderTab = useCallback(
+    async (folder: string, name: string, complain = true) => {
+      const tabPath = FOLDER_TAB_PREFIX + folder
+      if (ref.current.tabs.some((t) => t.path === tabPath)) {
+        dispatch({ type: 'activeTab', path: tabPath })
+        return
+      }
+      try {
+        const meta = await api.readFolderMeta(folder)
+        dispatch({
+          type: 'openTab',
+          tab: {
+            kind: 'folder',
+            path: tabPath,
+            folder,
+            name,
+            meta,
+            saved: JSON.stringify(meta),
+            section: 'headers'
+          }
+        })
+      } catch (err) {
+        if (complain) toast('error', `Could not open ${name}: ${(err as Error).message}`)
+      }
+    },
+    [toast]
+  )
+
+  /**
+   * Folder settings that are open with unsaved edits, keyed by folder.
+   *
+   * Sending applies these, so a folder change can be tested before it is
+   * committed to disk - the same way an unsaved request is sent as edited.
+   */
+  const dirtyFolders = useCallback((): Record<string, FolderMeta> | undefined => {
+    const entries = ref.current.tabs
+      .filter((t): t is FolderTabState => !isRequestTab(t) && isDirty(t))
+      .map((t) => [t.folder, t.meta] as const)
+    return entries.length ? Object.fromEntries(entries) : undefined
+  }, [])
 
   /** Shared tail of every paste: reveal the result and select it. */
   const afterPaste = useCallback(
@@ -665,7 +768,9 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
         const tab = ref.current.tabs.find((t) => t.path === path)
         if (tab && !force && isDirty(tab)) {
           const keep = !window.confirm(
-            `"${tab.request.name}" has unsaved changes.\n\nClose without saving?`
+            `"${isRequestTab(tab) ? tab.request.name : tab.name}" has unsaved changes.
+
+Close without saving?`
           )
           if (keep) return
         }
@@ -690,6 +795,19 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
         }
         const tab = ref.current.tabs.find((t) => t.path === path)
         if (!tab) return
+
+        if (!isRequestTab(tab)) {
+          const saved = await guard(async () => {
+            await api.saveFolderMeta(tab.folder, tab.meta)
+            return true
+          })
+          if (!saved) return
+          dispatch({ type: 'patchTab', path, patch: { saved: JSON.stringify(tab.meta) } })
+          toast('success', `Saved ${tab.name} settings`)
+          void refresh()
+          return
+        }
+
         const ok = await guard(async () => {
           await api.saveRequest(path, tab.request)
           return true
@@ -701,10 +819,10 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
       },
       async send(path) {
         const tab = ref.current.tabs.find((t) => t.path === path)
-        if (!tab || tab.running) return
+        if (!tab || !isRequestTab(tab) || tab.running) return
         dispatch({ type: 'patchTab', path, patch: { running: true } })
         try {
-          const result = await api.send(path, tab.request)
+          const result = await api.send(path, tab.request, dirtyFolders())
           dispatch({
             type: 'patchTab',
             path,
@@ -741,7 +859,7 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
       },
       async cancel(path) {
         const tab = ref.current.tabs.find((t) => t.path === path)
-        if (!tab?.running) return
+        if (!tab || !isRequestTab(tab) || !tab.running) return
         await api.cancelAll()
       },
       async setActiveEnv(name) {
@@ -783,6 +901,10 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
 
       showWelcome(open) {
         dispatch({ type: 'welcome', open })
+      },
+
+      async openFolderSettings(folder, name) {
+        await openFolderTab(folder, name)
       },
 
       async createFolder(parentDir) {
@@ -827,8 +949,10 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
         const next = await guard(() => api.move(path, destDir))
         if (!next) return
         if (ref.current.tabs.some((t) => t.path === path)) {
-          const name = ref.current.tabs.find((t) => t.path === path)!.request.name
-          dispatch({ type: 'retitleTab', from: path, to: next, name })
+          const moved = ref.current.tabs.find((t) => t.path === path)
+          if (moved && isRequestTab(moved)) {
+            dispatch({ type: 'retitleTab', from: path, to: next, name: moved.request.name })
+          }
         }
         await refresh()
       },
@@ -856,7 +980,9 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
       async copyCurl(path) {
         // Send the in-editor version so unsaved edits are reflected.
         const tab = ref.current.tabs.find((t) => t.path === path)
-        const result = await guard(() => api.toCurl(path, tab?.request))
+        const result = await guard(() =>
+          api.toCurl(path, tab && isRequestTab(tab) ? tab.request : undefined, dirtyFolders())
+        )
         if (!result) return
         if (result.missing.length) {
           toast(
@@ -918,7 +1044,8 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
         // into another Frap window, a file, or a message to a colleague.
         if (path.endsWith(REQUEST_EXT)) {
           const tab = ref.current.tabs.find((t) => t.path === path)
-          const request = tab?.request ?? (await api.readRequest(path).catch(() => null))
+          const request =
+            tab && isRequestTab(tab) ? tab.request : await api.readRequest(path).catch(() => null)
           if (request) void api.clipboard.write(JSON.stringify(request, null, 2))
         }
         toast('info', `Copied ${labelOf(path)}`)
@@ -941,8 +1068,10 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
             const moved = await guard(() => api.move(clip.path, destDir))
             if (!moved) return
             if (ref.current.tabs.some((t) => t.path === clip.path)) {
-              const name = ref.current.tabs.find((t) => t.path === clip.path)!.request.name
-              dispatch({ type: 'retitleTab', from: clip.path, to: moved, name })
+              const cutTab = ref.current.tabs.find((t) => t.path === clip.path)
+              if (cutTab && isRequestTab(cutTab)) {
+                dispatch({ type: 'retitleTab', from: clip.path, to: moved, name: cutTab.request.name })
+              }
               setTimeout(persistTabs, 0)
             }
             // A cut can only be pasted once; a copy can be pasted repeatedly.
@@ -977,11 +1106,13 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
     }),
     [
       afterPaste,
+      dirtyFolders,
       guard,
       importCurlInternal,
       loadHistory,
       loadVariables,
       open,
+      openFolderTab,
       openTabInternal,
       persistTabs,
       refresh,

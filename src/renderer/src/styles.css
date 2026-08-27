@@ -1602,3 +1602,72 @@ textarea.curl-input {
     transform: rotate(360deg);
   }
 }
+
+/* A folder that contributes headers, auth or scripts to everything below. */
+.method.other.has-settings {
+  color: var(--accent);
+}
+.method.other.has-settings::after {
+  content: '•';
+  margin-left: 2px;
+}
+
+/* ---------------------------------------------------------------- */
+/* Folder settings tab                                               */
+/* ---------------------------------------------------------------- */
+
+.folder-scope {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 12px;
+}
+.folder-scope .method {
+  width: auto;
+}
+.folder-scope .faint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The caret is its own control: it collapses, while the row opens. */
+.tree-row .caret.toggle {
+  cursor: pointer;
+  border-radius: 3px;
+}
+.tree-row .caret.toggle:hover {
+  background: var(--elevated);
+  color: var(--text);
+}
+
+/* ---------------------------------------------------------------- */
+/* Inheritance toggle                                                */
+/* ---------------------------------------------------------------- */
+
+.inherit-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 2px 7px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.inherit-toggle:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+/* Blocking inheritance is the unusual choice, so it is the one that shows. */
+.inherit-toggle.blocked {
+  border-style: solid;
+  border-color: var(--warn);
+  color: var(--warn);
+}

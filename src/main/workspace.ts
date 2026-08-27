@@ -13,19 +13,22 @@ import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import {
-  FILE_FORMAT,
+  FORMAT_VERSION,
   FOLDER_META,
   REQUEST_EXT,
   WORKSPACE_FILE,
   type Auth,
   type FolderMeta,
+  type FolderScope,
   type FrapRequest,
+  type InheritFlags,
   type KeyValue,
   type RequestBody,
   type TreeNode,
   type Workspace,
   type WorkspaceConfig
 } from '../shared/types.ts'
+import { migrateDocument } from './migrate.ts'
 
 const IGNORED_DIRS = new Set(['.git', 'node_modules', '.vscode', '.idea', 'dist', 'out'])
 
@@ -52,9 +55,13 @@ function normalizeKeyValues(input: unknown): KeyValue[] {
   }))
 }
 
-function normalizeAuth(input: unknown): Auth {
+/**
+ * `inherit` is the default: a request with no auth of its own picks up
+ * whatever the nearest folder provides, and `none` explicitly opts out.
+ */
+function normalizeAuth(input: unknown, fallback: Auth['type'] = 'inherit'): Auth {
   const a = (input ?? {}) as Auth
-  const type = a.type ?? 'none'
+  const type = a.type ?? fallback
   switch (type) {
     case 'bearer':
       return { type, token: a.token ?? '' }
@@ -62,11 +69,29 @@ function normalizeAuth(input: unknown): Auth {
       return { type, username: a.username ?? '', password: a.password ?? '' }
     case 'apikey':
       return { type, key: a.key ?? '', value: a.value ?? '', in: a.in ?? 'header' }
-    case 'inherit':
-      return { type }
-    default:
+    case 'none':
       return { type: 'none' }
+    default:
+      return { type: 'inherit' }
   }
+}
+
+/** Everything is inherited unless the file says otherwise. */
+function normalizeInherit(input: unknown): InheritFlags {
+  const i = (input ?? {}) as Partial<InheritFlags>
+  return {
+    headers: i.headers !== false,
+    auth: i.auth !== false,
+    preRequest: i.preRequest !== false,
+    postResponse: i.postResponse !== false
+  }
+}
+
+/** True when nothing is blocked, which is the default and so is not written. */
+export function inheritsEverything(flags: InheritFlags): boolean {
+  return (
+    flags.headers && flags.auth && flags.preRequest && flags.postResponse
+  )
 }
 
 function normalizeBody(input: unknown): RequestBody {
@@ -93,7 +118,7 @@ function normalizeBody(input: unknown): RequestBody {
 /** Fills in defaults so a hand-written or partial file still loads cleanly. */
 export function normalizeRequest(input: Partial<FrapRequest>, fallbackName: string): FrapRequest {
   return {
-    frap: FILE_FORMAT,
+    frap: FORMAT_VERSION,
     id: input.id || randomUUID(),
     name: input.name || fallbackName,
     order: Number.isFinite(input.order) ? Number(input.order) : 0,
@@ -107,6 +132,7 @@ export function normalizeRequest(input: Partial<FrapRequest>, fallbackName: stri
       preRequest: input.scripts?.preRequest ?? '',
       postResponse: input.scripts?.postResponse ?? ''
     },
+    inherit: normalizeInherit(input.inherit),
     ...(input.docs ? { docs: input.docs } : {}),
     ...(input.settings && Object.keys(input.settings).length ? { settings: input.settings } : {})
   }
@@ -118,7 +144,7 @@ export function normalizeRequest(input: Partial<FrapRequest>, fallbackName: stri
  */
 export function serializeRequest(req: FrapRequest): string {
   const out: Record<string, unknown> = {
-    frap: FILE_FORMAT,
+    frap: FORMAT_VERSION,
     id: req.id,
     name: req.name,
     order: req.order,
@@ -127,7 +153,7 @@ export function serializeRequest(req: FrapRequest): string {
   }
   if (req.params.length) out.params = req.params
   if (req.headers.length) out.headers = req.headers
-  if (req.auth.type !== 'none') out.auth = req.auth
+  if (req.auth.type !== 'inherit') out.auth = req.auth
   if (req.body.mode !== 'none') out.body = req.body
   if (req.scripts.preRequest || req.scripts.postResponse) {
     const scripts: Record<string, string> = {}
@@ -135,6 +161,7 @@ export function serializeRequest(req: FrapRequest): string {
     if (req.scripts.postResponse) scripts.postResponse = req.scripts.postResponse
     out.scripts = scripts
   }
+  if (!inheritsEverything(req.inherit)) out.inherit = req.inherit
   if (req.docs) out.docs = req.docs
   if (req.settings && Object.keys(req.settings).length) out.settings = req.settings
   return toJson(out)
@@ -201,12 +228,123 @@ async function uniqueDir(parentDir: string, base: string): Promise<string> {
 /* Reading the tree                                                    */
 /* ------------------------------------------------------------------ */
 
-async function readFolderMeta(dir: string): Promise<FolderMeta | null> {
+/** Fills in defaults, so a folder file written by hand still loads. */
+export function normalizeFolderMeta(input: Partial<FolderMeta>): FolderMeta {
+  return {
+    frap: FORMAT_VERSION,
+    ...(input.id ? { id: input.id } : {}),
+    order: Number.isFinite(input.order) ? Number(input.order) : 0,
+    headers: normalizeKeyValues(input.headers),
+    // A folder contributes nothing unless it says otherwise, so its default
+    // is `inherit` too - which for the outermost folder means "no auth".
+    auth: normalizeAuth(input.auth),
+    scripts: {
+      preRequest: input.scripts?.preRequest ?? '',
+      postResponse: input.scripts?.postResponse ?? ''
+    },
+    inherit: normalizeInherit(input.inherit),
+    ...(input.docs ? { docs: input.docs } : {})
+  }
+}
+
+/** Fixed key order and no empty sections, exactly like a request file. */
+export function serializeFolderMeta(meta: FolderMeta): string {
+  const out: Record<string, unknown> = { frap: FORMAT_VERSION, order: meta.order }
+  if (meta.id) out.id = meta.id
+  if (meta.headers.length) out.headers = meta.headers
+  if (meta.auth.type !== 'inherit') out.auth = meta.auth
+  if (meta.scripts.preRequest || meta.scripts.postResponse) {
+    const scripts: Record<string, string> = {}
+    if (meta.scripts.preRequest) scripts.preRequest = meta.scripts.preRequest
+    if (meta.scripts.postResponse) scripts.postResponse = meta.scripts.postResponse
+    out.scripts = scripts
+  }
+  if (!inheritsEverything(meta.inherit)) out.inherit = meta.inherit
+  if (meta.docs) out.docs = meta.docs
+  return toJson(out)
+}
+
+/** True when a folder file carries nothing worth keeping on disk. */
+export function isEmptyFolderMeta(meta: FolderMeta): boolean {
+  return (
+    meta.order === 0 &&
+    meta.headers.length === 0 &&
+    meta.auth.type === 'inherit' &&
+    !meta.scripts.preRequest &&
+    !meta.scripts.postResponse &&
+    inheritsEverything(meta.inherit) &&
+    !meta.docs
+  )
+}
+
+export async function readFolderMeta(dir: string): Promise<FolderMeta | null> {
+  const file = path.join(dir, FOLDER_META)
+  let raw: string
   try {
-    return JSON.parse(await fs.readFile(path.join(dir, FOLDER_META), 'utf8')) as FolderMeta
+    raw = await fs.readFile(file, 'utf8')
   } catch {
     return null
   }
+  // A malformed folder file must not take the whole tree down with it, but a
+  // file from a newer Frap is a real problem the user needs to hear about.
+  const { doc } = migrateDocument('folder', JSON.parse(raw), file)
+  return normalizeFolderMeta(doc as Partial<FolderMeta>)
+}
+
+export async function writeFolderMeta(dir: string, meta: FolderMeta): Promise<void> {
+  const file = path.join(dir, FOLDER_META)
+  // Settings that say nothing leave no file behind, so an empty folder does
+  // not gain a file in git just because its settings panel was opened.
+  if (isEmptyFolderMeta(meta)) {
+    await fs.rm(file, { force: true })
+    return
+  }
+  const next = serializeFolderMeta(meta)
+  const current = await fs.readFile(file, 'utf8').catch(() => null)
+  if (current === next) return
+  await fs.writeFile(file, next, 'utf8')
+}
+
+/**
+ * Every folder from the workspace root down to `dir`, outermost first, with
+ * the settings each one contributes.
+ *
+ * The root itself counts: a `_folder.frap.json` beside `frap.workspace.json`
+ * is how collection-wide headers, auth and scripts are expressed.
+ */
+export async function folderChain(
+  root: string,
+  dir: string,
+  /**
+   * Settings being edited but not yet saved, keyed by folder path.
+   *
+   * A folder tab that is open and dirty should affect what you send, the same
+   * way an unsaved request does - otherwise you would have to save before you
+   * could test a change. An override also inserts a folder that has no file
+   * on disk yet, which is exactly the case when you are adding its first
+   * header.
+   */
+  overrides?: Map<string, FolderMeta>
+): Promise<FolderScope[]> {
+  assertInside(root, dir)
+  const segments = path
+    .relative(root, path.resolve(dir))
+    .split(path.sep)
+    .filter((part) => part && part !== '.')
+
+  const chain: FolderScope[] = []
+  let current = path.resolve(root)
+  for (let depth = 0; depth <= segments.length; depth++) {
+    if (depth > 0) current = path.join(current, segments[depth - 1])
+    const meta = overrides?.get(current) ?? (await readFolderMeta(current).catch(() => null))
+    if (!meta) continue
+    chain.push({
+      relPath: toRel(root, current),
+      name: depth === 0 ? 'Collection' : segments[depth - 1],
+      meta
+    })
+  }
+  return chain
 }
 
 /**
@@ -246,13 +384,16 @@ export async function scanTree(root: string, dir = root): Promise<TreeNode[]> {
     const abs = path.join(dir, entry.name)
     if (entry.isDirectory()) {
       if (IGNORED_DIRS.has(entry.name) || entry.name.startsWith('.')) continue
-      const meta = await readFolderMeta(abs)
+      const meta = await readFolderMeta(abs).catch(() => null)
       nodes.push({
         kind: 'folder',
         name: entry.name,
         path: abs,
         relPath: toRel(root, abs),
         order: meta?.order ?? 0,
+        // Folder settings are invisible otherwise: nothing in the tree would
+        // hint that requests below are picking up headers or auth.
+        ...(meta && !isEmptyFolderMeta({ ...meta, order: 0 }) ? { hasSettings: true } : {}),
         children: await scanTree(root, abs)
       })
     } else if (entry.isFile() && isRequestFile(entry.name) && entry.name !== FOLDER_META) {
@@ -279,7 +420,7 @@ export async function scanTree(root: string, dir = root): Promise<TreeNode[]> {
 
 function normalizeConfig(input: Partial<WorkspaceConfig>, root: string): WorkspaceConfig {
   return {
-    frap: FILE_FORMAT,
+    frap: FORMAT_VERSION,
     name: input.name || path.basename(root),
     environments: Array.isArray(input.environments)
       ? input.environments
@@ -336,8 +477,8 @@ export async function openWorkspace(root: string): Promise<Workspace> {
 
 export async function readRequest(absPath: string): Promise<FrapRequest> {
   const raw = await fs.readFile(absPath, 'utf8')
-  const parsed = JSON.parse(raw) as Partial<FrapRequest>
-  const req = normalizeRequest(parsed, displayName(path.basename(absPath)))
+  const { doc } = migrateDocument('request', JSON.parse(raw), absPath)
+  const req = normalizeRequest(doc as Partial<FrapRequest>, displayName(path.basename(absPath)))
   // The file name always wins, so renaming on disk renames the request.
   req.name = displayName(path.basename(absPath))
   return req
@@ -514,9 +655,8 @@ export async function reorder(root: string, parentDir: string, orderedPaths: str
         req.order = index + 1
         await writeRequest(abs, req)
       } else {
-        const metaPath = path.join(abs, FOLDER_META)
-        const existing = (await readFolderMeta(abs)) ?? { frap: FILE_FORMAT, order: 0 }
-        await fs.writeFile(metaPath, toJson({ ...existing, frap: FILE_FORMAT, order: index + 1 }), 'utf8')
+        const existing = (await readFolderMeta(abs)) ?? normalizeFolderMeta({})
+        await writeFolderMeta(abs, { ...existing, order: index + 1 })
       }
     })
   )

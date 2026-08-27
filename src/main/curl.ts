@@ -11,7 +11,8 @@
 
 import { randomUUID } from 'node:crypto'
 import {
-  FILE_FORMAT,
+  FORMAT_VERSION,
+  INHERIT_ALL,
   type Auth,
   type FormField,
   type FrapRequest,
@@ -618,7 +619,8 @@ export function parseCurl(
   return {
     warnings,
     request: {
-      frap: FILE_FORMAT,
+      frap: FORMAT_VERSION,
+      inherit: { ...INHERIT_ALL },
       id: randomUUID(),
       name,
       order: 0,

@@ -1,6 +1,6 @@
 import { useMemo, type JSX } from 'react'
 import { api } from '../api'
-import { useStore, type ResponseTab, type TabState } from '../store'
+import { useStore, type ResponseTab, type RequestTabState } from '../store'
 import { CodeEditor, type Language } from './CodeEditor'
 
 function formatBytes(bytes: number): string {
@@ -28,7 +28,7 @@ function prettyIfJson(text: string, language: Language): string {
 }
 
 interface Props {
-  tab: TabState
+  tab: RequestTabState
 }
 
 export function ResponsePane({ tab }: Props): JSX.Element {

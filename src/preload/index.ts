@@ -70,8 +70,13 @@ const api = {
     duplicate: (absPath: string) => call<string>('request:duplicate', absPath),
     createFrom: (parentDir: string, request: unknown) =>
       call<string>('request:createFrom', parentDir, request),
-    toCurl: (absPath: string, req?: unknown) =>
-      call<{ command: string; missing: string[] }>('request:toCurl', absPath, req)
+    toCurl: (absPath: string, req?: unknown, folderOverrides?: unknown) =>
+      call<{ command: string; missing: string[] }>(
+        'request:toCurl',
+        absPath,
+        req,
+        folderOverrides
+      )
   },
   curl: {
     parse: (text: string, substitute: boolean) =>
@@ -103,6 +108,10 @@ const api = {
     write: (text: string) => call<boolean>('clipboard:write', text),
     read: () => call<string>('clipboard:read')
   },
+  folders: {
+    read: (absPath: string) => call<unknown>('folder:read', absPath),
+    save: (absPath: string, meta: unknown) => call<boolean>('folder:save', absPath, meta)
+  },
   nodes: {
     createFolder: (parentDir: string, name?: string) => call<string>('folder:create', parentDir, name),
     rename: (absPath: string, name: string) => call<string>('node:rename', absPath, name),
@@ -121,7 +130,8 @@ const api = {
     saveRaw: (name: string, raw: string) => call<unknown[]>('env:saveRaw', name, raw)
   },
   exec: {
-    send: (absPath: string, req: unknown) => call<unknown>('exec:send', absPath, req),
+    send: (absPath: string, req: unknown, folderOverrides?: unknown) =>
+      call<unknown>('exec:send', absPath, req, folderOverrides),
     cancel: (runId: string) => call<boolean>('exec:cancel', runId),
     cancelAll: () => call<boolean>('exec:cancelAll')
   },

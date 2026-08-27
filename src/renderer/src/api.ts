@@ -5,6 +5,7 @@
 import type {
   EnvFileView,
   ExecResult,
+  FolderMeta,
   FrapRequest,
   HistoryEntry,
   RecentWorkspace,
@@ -77,7 +78,8 @@ export const api = {
     bridge.requests.createFrom(parentDir, request),
 
   /** Copies the request to the clipboard as a runnable cURL command. */
-  toCurl: (absPath: string, req?: FrapRequest) => bridge.requests.toCurl(absPath, req),
+  toCurl: (absPath: string, req?: FrapRequest, folderOverrides?: Record<string, FolderMeta>) =>
+    bridge.requests.toCurl(absPath, req, folderOverrides),
   parseCurl: (text: string, substitute: boolean) =>
     bridge.curl.parse(text, substitute) as Promise<{ request: FrapRequest; warnings: string[] }>,
   importCurl: (parentDir: string, text: string, substitute: boolean, name?: string) =>
@@ -96,6 +98,10 @@ export const api = {
 
   window: bridge.window,
   clipboard: bridge.clipboard,
+
+  /** Folder settings; pass '' for the workspace root, i.e. the collection. */
+  readFolderMeta: (absPath: string) => bridge.folders.read(absPath) as Promise<FolderMeta>,
+  saveFolderMeta: (absPath: string, meta: FolderMeta) => bridge.folders.save(absPath, meta),
 
   createFolder: (parentDir: string, name?: string) => bridge.nodes.createFolder(parentDir, name),
   rename: (absPath: string, name: string) => bridge.nodes.rename(absPath, name),
@@ -118,8 +124,9 @@ export const api = {
     bridge.env.setValue(name, key, value) as Promise<EnvFileView[]>,
   saveEnvRaw: (name: string, raw: string) => bridge.env.saveRaw(name, raw) as Promise<EnvFileView[]>,
 
-  send: (absPath: string, req: FrapRequest) =>
-    bridge.exec.send(absPath, req) as Promise<ExecResult & { runId: string }>,
+  /** `folderOverrides` carries folder settings that are open but unsaved. */
+  send: (absPath: string, req: FrapRequest, folderOverrides?: Record<string, FolderMeta>) =>
+    bridge.exec.send(absPath, req, folderOverrides) as Promise<ExecResult & { runId: string }>,
   cancel: (runId: string) => bridge.exec.cancel(runId),
   cancelAll: () => bridge.exec.cancelAll(),
 

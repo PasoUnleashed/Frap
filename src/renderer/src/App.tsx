@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type JSX, type MouseEvent } f
 import { WELCOME_TAB } from '@shared/types'
 import { api, type MenuItem } from './api'
 import { EnvironmentsDialog } from './components/EnvironmentsDialog'
+import { FolderPane } from './components/FolderPane'
 import { ImportCurlDialog } from './components/ImportCurlDialog'
 import { RequestPane } from './components/RequestPane'
 import { ResponsePane } from './components/ResponsePane'
@@ -10,7 +11,13 @@ import { SettingsDialog } from './components/SettingsDialog'
 import { Sidebar } from './components/Sidebar'
 import { VariableInput } from './components/VariableInput'
 import { Welcome } from './components/Welcome'
-import { isDirty, useStore, type TabState } from './store'
+import {
+  isDirty,
+  isRequestTab,
+  useStore,
+  type RequestTabState,
+  type TabState
+} from './store'
 
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']
 const isMac = api.platform === 'darwin'
@@ -174,6 +181,10 @@ function WorkspaceChip(): JSX.Element {
 /* Tabs                                                                */
 /* ------------------------------------------------------------------ */
 
+/** The badge and name a tab shows, whichever kind it is. */
+const tabBadge = (tab: TabState): string => (isRequestTab(tab) ? tab.request.method : 'DIR')
+const tabName = (tab: TabState): string => (isRequestTab(tab) ? tab.request.name : tab.name)
+
 /** How far an arrow click nudges the strip. */
 const TAB_SCROLL_STEP = 220
 
@@ -239,7 +250,7 @@ function TabStrip(): JSX.Element {
       id: String(index),
       type: 'checkbox',
       checked: tab.path === state.activeTab,
-      label: `${tab.request.method} ${tab.request.name}${isDirty(tab) ? ' •' : ''}`
+      label: `${tabBadge(tab)} ${tabName(tab)}${isDirty(tab) ? ' •' : ''}`
     }))
     const box = (event.currentTarget as HTMLElement).getBoundingClientRect()
     const choice = await api.contextMenu(items, { x: box.left, y: box.bottom })
@@ -342,10 +353,13 @@ function TabStrip(): JSX.Element {
             onContextMenu={(e) => void onContextMenu(e, tab)}
             title={tab.path}
           >
-            <span className={`method ${tab.request.method.toLowerCase()}`} style={{ width: 'auto' }}>
-              {tab.request.method}
+            <span
+              className={`method ${tabBadge(tab).toLowerCase()}`}
+              style={{ width: 'auto' }}
+            >
+              {tabBadge(tab)}
             </span>
-            <span className="name">{tab.request.name}</span>
+            <span className="name">{tabName(tab)}</span>
             {isDirty(tab) ? (
               <span className="dot" title="Unsaved changes" />
             ) : (
@@ -395,7 +409,7 @@ function UrlBar({
   tab,
   urlRef
 }: {
-  tab: TabState
+  tab: RequestTabState
   urlRef: React.RefObject<HTMLInputElement | null>
 }): JSX.Element {
   const { actions } = useStore()
@@ -537,6 +551,11 @@ function Workbench(): JSX.Element {
       const current = active()
       if (current) fn(current)
     }
+    /** For things only a request can do: send, cancel, copy as cURL. */
+    const withRequest = (fn: (tab: RequestTabState) => void) => () => {
+      const current = active()
+      if (current && isRequestTab(current)) fn(current)
+    }
     /** Ctrl+Tab wraps around, so a long strip is still fully reachable. */
     const cycleTab = (step: number): void => {
       if (state.tabs.length < 2) return
@@ -551,7 +570,7 @@ function Workbench(): JSX.Element {
       ),
       window.frap.on('menu:newFolder', () => state.root && void actions.createFolder(state.root)),
       window.frap.on('menu:importCurl', () => actions.openImportCurl(state.root ?? '')),
-      window.frap.on('menu:copyCurl', withActive((t) => void actions.copyCurl(t.path))),
+      window.frap.on('menu:copyCurl', withRequest((t) => void actions.copyCurl(t.path))),
       window.frap.on('menu:save', () => {
         const current = active()
         if (current) void actions.save(current.path)
@@ -571,8 +590,8 @@ function Workbench(): JSX.Element {
       }),
       window.frap.on('menu:nextTab', () => cycleTab(1)),
       window.frap.on('menu:prevTab', () => cycleTab(-1)),
-      window.frap.on('menu:send', withActive((t) => void actions.send(t.path))),
-      window.frap.on('menu:cancel', withActive((t) => void actions.cancel(t.path))),
+      window.frap.on('menu:send', withRequest((t) => void actions.send(t.path))),
+      window.frap.on('menu:cancel', withRequest((t) => void actions.cancel(t.path))),
       window.frap.on('menu:focusUrl', () => {
         urlRef.current?.focus()
         urlRef.current?.select()
@@ -598,6 +617,8 @@ function Workbench(): JSX.Element {
         <TabStrip />
         {state.activeTab === WELCOME_TAB ? (
           <Welcome />
+        ) : tab && !isRequestTab(tab) ? (
+          <FolderPane tab={tab} />
         ) : tab ? (
           <>
             <UrlBar tab={tab} urlRef={urlRef} />

@@ -1,9 +1,10 @@
 import { useMemo, type JSX } from 'react'
-import type { FrapRequest } from '@shared/types'
-import { useStore, type RequestTab, type TabState } from '../store'
+import type { FrapRequest, InheritFlags } from '@shared/types'
+import { useStore, type RequestTab, type RequestTabState } from '../store'
 import { AuthEditor } from './AuthEditor'
 import { BodyEditor } from './BodyEditor'
 import { CodeEditor } from './CodeEditor'
+import { InheritToggle } from './InheritToggle'
 import { KeyValueEditor } from './KeyValueEditor'
 
 const PRE_TEMPLATE = `// Runs before the request is sent.
@@ -24,7 +25,7 @@ frap.env.set('TOKEN', data.token)
 `
 
 interface Props {
-  tab: TabState
+  tab: RequestTabState
 }
 
 function countOf(rows: { enabled: boolean; key: string }[] | undefined): number {
@@ -36,6 +37,8 @@ export function RequestPane({ tab }: Props): JSX.Element {
   const request = tab.request
 
   const patch = (changes: Partial<FrapRequest>): void => actions.patchRequest(tab.path, changes)
+  const setInherit = (key: keyof InheritFlags, value: boolean): void =>
+    patch({ inherit: { ...request.inherit, [key]: value } })
   const setTab = (reqTab: RequestTab): void => actions.patchTab(tab.path, { reqTab })
 
   const counts = useMemo(
@@ -52,7 +55,8 @@ export function RequestPane({ tab }: Props): JSX.Element {
     { id: 'params', label: 'Params', badge: counts.params || undefined },
     { id: 'headers', label: 'Headers', badge: counts.headers || undefined },
     { id: 'body', label: 'Body', badge: request.body.mode === 'none' ? undefined : '●' },
-    { id: 'auth', label: 'Auth', badge: request.auth.type === 'none' ? undefined : '●' },
+    // `inherit` is the default, so the dot means "this request sets its own".
+    { id: 'auth', label: 'Auth', badge: request.auth.type === 'inherit' ? undefined : '●' },
     { id: 'pre', label: 'Pre-request', badge: counts.pre ? '●' : undefined },
     { id: 'post', label: 'Tests', badge: counts.post ? '●' : undefined },
     { id: 'docs', label: 'Docs' }
@@ -84,12 +88,21 @@ export function RequestPane({ tab }: Props): JSX.Element {
         )}
 
         {tab.reqTab === 'headers' && (
-          <KeyValueEditor
-            rows={request.headers}
-            onChange={(headers) => patch({ headers })}
-            keyPlaceholder="Header"
-            hint="Content-Type, Accept, User-Agent and Content-Length are filled in automatically unless you set them here."
-          />
+          <>
+            <div className="editor-toolbar">
+              <InheritToggle
+                inherited={request.inherit.headers}
+                onChange={(value) => setInherit('headers', value)}
+                what="folder headers"
+              />
+            </div>
+            <KeyValueEditor
+              rows={request.headers}
+              onChange={(headers) => patch({ headers })}
+              keyPlaceholder="Header"
+              hint="Content-Type, Accept, User-Agent and Content-Length are filled in automatically unless you set them here."
+            />
+          </>
         )}
 
         {tab.reqTab === 'body' && (
@@ -97,13 +110,27 @@ export function RequestPane({ tab }: Props): JSX.Element {
         )}
 
         {tab.reqTab === 'auth' && (
-          <AuthEditor auth={request.auth} onChange={(auth) => patch({ auth })} />
+          <>
+            <div className="editor-toolbar">
+              <InheritToggle
+                inherited={request.inherit.auth}
+                onChange={(value) => setInherit('auth', value)}
+                what="folder auth"
+              />
+            </div>
+            <AuthEditor auth={request.auth} onChange={(auth) => patch({ auth })} />
+          </>
         )}
 
         {tab.reqTab === 'pre' && (
           <div className="editor-wrap">
             <div className="editor-toolbar">
               <span className="dim">Runs before the request is sent</span>
+              <InheritToggle
+                inherited={request.inherit.preRequest}
+                onChange={(value) => setInherit('preRequest', value)}
+                what="folder scripts"
+              />
               <span className="spacer" />
               {!request.scripts.preRequest && (
                 <button
@@ -137,6 +164,11 @@ export function RequestPane({ tab }: Props): JSX.Element {
           <div className="editor-wrap">
             <div className="editor-toolbar">
               <span className="dim">Runs after the response arrives</span>
+              <InheritToggle
+                inherited={request.inherit.postResponse}
+                onChange={(value) => setInherit('postResponse', value)}
+                what="folder tests"
+              />
               <span className="spacer" />
               {!request.scripts.postResponse && (
                 <button

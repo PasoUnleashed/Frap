@@ -5,11 +5,20 @@ import { VariableInput } from './VariableInput'
 interface Props {
   auth: Auth
   onChange: (auth: Auth) => void
+  /** What "inherit" means here: a request takes its folder's, a folder its parent's. */
+  inheritLabel?: string
+  /** Extra sentence under the picker, when the context needs explaining. */
+  note?: string
 }
 
 const field = { display: 'grid', gridTemplateColumns: '110px 1fr', gap: 10, alignItems: 'center' }
 
-export function AuthEditor({ auth, onChange }: Props): JSX.Element {
+export function AuthEditor({
+  auth,
+  onChange,
+  inheritLabel = 'Inherit from folder',
+  note
+}: Props): JSX.Element {
   return (
     <div style={{ padding: 14, display: 'grid', gap: 12, maxWidth: 640 }}>
       <div style={field}>
@@ -18,6 +27,7 @@ export function AuthEditor({ auth, onChange }: Props): JSX.Element {
           value={auth.type}
           onChange={(e) => onChange({ type: e.target.value as Auth['type'] })}
         >
+          <option value="inherit">{inheritLabel}</option>
           <option value="none">No auth</option>
           <option value="bearer">Bearer token</option>
           <option value="basic">Basic</option>
@@ -90,6 +100,12 @@ export function AuthEditor({ auth, onChange }: Props): JSX.Element {
             </select>
           </div>
         </>
+      )}
+
+      {note && (
+        <p className="faint" style={{ marginTop: 4, lineHeight: 1.7 }}>
+          {note}
+        </p>
       )}
 
       <p className="faint" style={{ marginTop: 4 }}>

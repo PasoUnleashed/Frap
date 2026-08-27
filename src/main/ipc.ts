@@ -16,10 +16,12 @@ import { promises as fs, watch, type FSWatcher } from 'node:fs'
 import * as path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import {
+  FOLDER_META,
   WORKSPACE_FILE,
   isDraftPath,
   type EnvFileView,
   type ExecResult,
+  type FolderMeta,
   type FrapRequest,
   type HistoryEntry,
   type RecentWorkspace,
@@ -44,18 +46,22 @@ import { SelfWriteTracker } from './selfwrites.ts'
 import {
   DEFAULT_SETTINGS,
   copyNode,
+  folderChain,
   createFolder,
   createRequest,
   duplicateRequest,
   moveNode,
+  normalizeFolderMeta,
   normalizeRequest,
   openWorkspace,
   readConfig,
+  readFolderMeta,
   readRequest,
   renameNode,
   reorder,
   scanTree,
   writeConfig,
+  writeFolderMeta,
   writeNewRequest,
   writeRequest,
   assertInside
@@ -241,6 +247,19 @@ async function listEnvironments(): Promise<EnvFileView[]> {
       }
     })
   )
+}
+
+/**
+ * Folder settings the renderer has open and unsaved, keyed by folder path.
+ * Normalised here so a half-built object from the editor is still safe.
+ */
+function toOverrides(input?: Record<string, FolderMeta>): Map<string, FolderMeta> | undefined {
+  if (!input) return undefined
+  const map = new Map<string, FolderMeta>()
+  for (const [folder, meta] of Object.entries(input)) {
+    map.set(path.resolve(folder), normalizeFolderMeta(meta))
+  }
+  return map.size ? map : undefined
 }
 
 /* ------------------------------------------------------------------ */
@@ -450,39 +469,48 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
    * Renders the request as it would actually be sent, with every variable
    * already resolved, and puts it on the clipboard.
    */
-  handle('request:toCurl', async (absPath: string, req?: FrapRequest) => {
-    // A draft has no file to fall back on, so the editor's copy is all there
-    // is - and no workspace settings to honour.
-    if (isDraftPath(absPath)) {
-      if (!req) throw new Error('Nothing to copy yet')
-      const request = normalizeRequest(req, 'Draft')
-      const missing = new Set<string>()
+  handle(
+    'request:toCurl',
+    async (absPath: string, req?: FrapRequest, folderOverrides?: Record<string, FolderMeta>) => {
+      // A draft has no file to fall back on, so the editor's copy is all there
+      // is - and no workspace settings to honour.
+      if (isDraftPath(absPath)) {
+        if (!req) throw new Error('Nothing to copy yet')
+        const request = normalizeRequest(req, 'Draft')
+        const missing = new Set<string>()
+        const scope = await activeScope()
+        const mutable = toMutable(request, { root: app.getPath('home'), scope, missing })
+        const command = toCurl(request, mutable, {
+          followRedirects: DEFAULT_SETTINGS.followRedirects,
+          validateTls: DEFAULT_SETTINGS.validateTls
+        })
+        clipboard.writeText(command)
+        return { command, missing: [...missing] }
+      }
+
+      const { root, config } = requireWorkspace()
+      assertInside(root, absPath)
+      // Prefer the in-editor version so unsaved edits are included.
+      const request = req
+        ? normalizeRequest(req, path.basename(absPath))
+        : await readRequest(absPath)
       const scope = await activeScope()
-      const mutable = toMutable(request, { root: app.getPath('home'), scope, missing })
+      const missing = new Set<string>()
+      const mutable = toMutable(request, {
+        root,
+        scope,
+        missing,
+        userAgent: userAgent(),
+        folders: await folderChain(root, path.dirname(absPath), toOverrides(folderOverrides))
+      })
       const command = toCurl(request, mutable, {
-        followRedirects: DEFAULT_SETTINGS.followRedirects,
-        validateTls: DEFAULT_SETTINGS.validateTls
+        followRedirects: request.settings?.followRedirects ?? config.settings.followRedirects,
+        validateTls: request.settings?.validateTls ?? config.settings.validateTls
       })
       clipboard.writeText(command)
       return { command, missing: [...missing] }
     }
-
-    const { root, config } = requireWorkspace()
-    assertInside(root, absPath)
-    // Prefer the in-editor version so unsaved edits are included.
-    const request = req
-      ? normalizeRequest(req, path.basename(absPath))
-      : await readRequest(absPath)
-    const scope = await activeScope()
-    const missing = new Set<string>()
-    const mutable = toMutable(request, { root, scope, missing })
-    const command = toCurl(request, mutable, {
-      followRedirects: request.settings?.followRedirects ?? config.settings.followRedirects,
-      validateTls: request.settings?.validateTls ?? config.settings.validateTls
-    })
-    clipboard.writeText(command)
-    return { command, missing: [...missing] }
-  })
+  )
 
   /** Parses without writing anything, so the import dialog can preview it. */
   handle('curl:parse', async (text: string, substitute: boolean) => {
@@ -537,6 +565,26 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     const moved = await moveNode(root, absPath, destDir)
     markSelfWrite(moved)
     return moved
+  })
+
+  /**
+   * Folder settings. The workspace root counts as a folder, which is how
+   * collection-wide headers, auth and scripts are expressed.
+   */
+  handle('folder:read', async (absPath: string) => {
+    const { root } = requireWorkspace()
+    const dir = absPath || root
+    assertInside(root, dir)
+    return (await readFolderMeta(dir)) ?? normalizeFolderMeta({})
+  })
+
+  handle('folder:save', async (absPath: string, meta: FolderMeta) => {
+    const { root } = requireWorkspace()
+    const dir = absPath || root
+    assertInside(root, dir)
+    markSelfWrite(dir, path.join(dir, FOLDER_META))
+    await writeFolderMeta(dir, normalizeFolderMeta(meta))
+    return true
   })
 
   handle('node:copy', async (absPath: string, destDir: string) => {
@@ -655,54 +703,64 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
   /* -- execution ----------------------------------------------------- */
 
-  handle('exec:send', async (absPath: string, req: FrapRequest): Promise<ExecResult & { runId: string }> => {
-    // A draft has no folder yet, so it runs against no environment and no
-    // workspace settings. Everything else about sending is identical.
-    if (isDraftPath(absPath)) return sendDraft(absPath, req)
+  handle(
+    'exec:send',
+    async (
+      absPath: string,
+      req: FrapRequest,
+      folderOverrides?: Record<string, FolderMeta>
+    ): Promise<ExecResult & { runId: string }> => {
+      // A draft has no folder yet, so it runs against no environment and no
+      // workspace settings. Everything else about sending is identical.
+      if (isDraftPath(absPath)) return sendDraft(absPath, req)
 
-    const { root, config } = requireWorkspace()
-    assertInside(root, absPath)
-    const runId = randomUUID()
-    const controller = new AbortController()
-    inflight.set(runId, controller)
-    try {
-      const request = normalizeRequest(req, path.basename(absPath))
-      const envPath = await activeEnvPath()
-      // Scripts may write to the environment; that is still our own write.
-      markSelfWrite(envPath)
-      const result = await execute({
-        root,
-        request,
-        envPath,
-        settings: config.settings,
-        vars: varsFor(root),
-        userAgent: userAgent(),
-        signal: controller.signal
-      })
-      // Re-mark: a long request can outlive the grace period, and a script's
-      // env write lands at the very end of execute().
-      if (result.envWrites.length) markSelfWrite(envPath)
-      if (!result.skipped) {
-        const entry: HistoryEntry = {
-          id: runId,
-          at: Date.now(),
-          requestId: request.id,
-          name: request.name,
-          method: result.sent?.method ?? request.method,
-          url: result.sent?.url ?? request.url,
-          ...(result.response
-            ? { status: result.response.status, timeMs: result.response.timings.totalMs }
-            : {}),
-          ...(result.error ? { error: result.error } : {})
+      const { root, config } = requireWorkspace()
+      assertInside(root, absPath)
+      const runId = randomUUID()
+      const controller = new AbortController()
+      inflight.set(runId, controller)
+      try {
+        const request = normalizeRequest(req, path.basename(absPath))
+        const envPath = await activeEnvPath()
+        // Scripts may write to the environment; that is still our own write.
+        markSelfWrite(envPath)
+        const result = await execute({
+          root,
+          // Headers, auth and scripts from every folder above the request,
+          // including any whose settings tab is open with unsaved edits.
+          folders: await folderChain(root, path.dirname(absPath), toOverrides(folderOverrides)),
+          request,
+          envPath,
+          settings: config.settings,
+          vars: varsFor(root),
+          userAgent: userAgent(),
+          signal: controller.signal
+        })
+        // Re-mark: a long request can outlive the grace period, and a script's
+        // env write lands at the very end of execute().
+        if (result.envWrites.length) markSelfWrite(envPath)
+        if (!result.skipped) {
+          const entry: HistoryEntry = {
+            id: runId,
+            at: Date.now(),
+            requestId: request.id,
+            name: request.name,
+            method: result.sent?.method ?? request.method,
+            url: result.sent?.url ?? request.url,
+            ...(result.response
+              ? { status: result.response.status, timeMs: result.response.timings.totalMs }
+              : {}),
+            ...(result.error ? { error: result.error } : {})
+          }
+          // History is a convenience, never a reason to fail a send.
+          await pushHistory(root, entry).catch(() => undefined)
         }
-        // History is a convenience, never a reason to fail a send.
-        await pushHistory(root, entry).catch(() => undefined)
+        return { ...result, runId }
+      } finally {
+        inflight.delete(runId)
       }
-      return { ...result, runId }
-    } finally {
-      inflight.delete(runId)
     }
-  })
+  )
 
   /* -- history and layout -------------------------------------------- */
 

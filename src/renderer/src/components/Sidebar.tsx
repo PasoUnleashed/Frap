@@ -8,9 +8,9 @@ import {
   type KeyboardEvent,
   type MouseEvent
 } from 'react'
-import { REQUEST_EXT, isDraftPath, type TreeNode } from '@shared/types'
+import { FOLDER_TAB_PREFIX, REQUEST_EXT, isDraftPath, type TreeNode } from '@shared/types'
 import { api, type MenuItem } from '../api'
-import { isDirty, useStore } from '../store'
+import { isDirty, isRequestTab, useStore, type RequestTabState } from '../store'
 import { HistoryList } from './HistoryList'
 
 const SEPARATOR: MenuItem = { type: 'separator' }
@@ -69,11 +69,14 @@ function Row({ row, filter, dragOver, setDragOver }: RowProps): JSX.Element {
 
   const isFolder = node.kind === 'folder'
   const open = filter ? true : !state.collapsed[node.path]
-  const openInTab = state.activeTab === node.path
+  // A folder's tab is addressed with the `folder:` prefix, so the "currently
+  // open" highlight and the unsaved dot have to look for that, not the path.
+  const tabPath = isFolder ? FOLDER_TAB_PREFIX + node.path : node.path
+  const openInTab = state.activeTab === tabPath
   const selected = state.selected === node.path
   const renaming = state.renaming === node.path
   const cut = state.clip?.mode === 'cut' && state.clip.path === node.path
-  const tab = state.tabs.find((t) => t.path === node.path)
+  const tab = state.tabs.find((t) => t.path === tabPath)
   const unsaved = tab ? isDirty(tab) : false
 
   const parentDir = isFolder ? node.path : dirOf(node.path)
@@ -121,6 +124,8 @@ function Row({ row, filter, dragOver, setDragOver }: RowProps): JSX.Element {
           { id: 'new-folder', label: 'New Folder' },
           { id: 'import-curl', label: 'Import from cURL...', accelerator: 'CmdOrCtrl+I' },
           SEPARATOR,
+          { id: 'settings', label: 'Folder Settings...' },
+          SEPARATOR,
           ...clipboardItems,
           SEPARATOR,
           { id: 'rename', label: 'Rename', accelerator: 'F2' },
@@ -155,6 +160,9 @@ function Row({ row, filter, dragOver, setDragOver }: RowProps): JSX.Element {
         break
       case 'import-curl':
         actions.openImportCurl(parentDir)
+        break
+      case 'settings':
+        void actions.openFolderSettings(node.path, node.name)
         break
       case 'copy':
         void actions.copyNode(node.path)
@@ -211,16 +219,35 @@ function Row({ row, filter, dragOver, setDragOver }: RowProps): JSX.Element {
       onDrop={onDrop}
       onClick={() => {
         actions.select(node.path)
-        if (isFolder) actions.toggleFolder(node.path)
+        // A folder opens its settings, exactly as a request opens itself.
+        // Collapsing is the caret's job, and the arrow keys'.
+        if (isFolder) void actions.openFolderSettings(node.path, node.name)
         else void actions.openTab(node.path)
       }}
       onDoubleClick={() => actions.beginRename(node.path)}
       onContextMenu={(e) => void onContextMenu(e)}
       title={node.relPath}
     >
-      <span className="caret">{isFolder ? (open ? '▼' : '▶') : ''}</span>
+      <span
+        className={`caret${isFolder ? ' toggle' : ''}`}
+        title={isFolder ? (open ? 'Collapse' : 'Expand') : undefined}
+        onClick={(e) => {
+          if (!isFolder) return
+          // Without this the row's own handler would open the tab as well.
+          e.stopPropagation()
+          actions.select(node.path)
+          actions.toggleFolder(node.path)
+        }}
+      >
+        {isFolder ? (open ? '▼' : '▶') : ''}
+      </span>
       {isFolder ? (
-        <span className="method other">DIR</span>
+        <span
+          className={`method other${node.hasSettings ? ' has-settings' : ''}`}
+          title={node.hasSettings ? 'This folder sets headers, auth or scripts' : undefined}
+        >
+          DIR
+        </span>
       ) : (
         <span className={`method ${(node.method ?? 'get').toLowerCase()}`}>{node.method}</span>
       )}
@@ -287,7 +314,9 @@ function Row({ row, filter, dragOver, setDragOver }: RowProps): JSX.Element {
  */
 function DraftSidebar(): JSX.Element {
   const { state, actions } = useStore()
-  const drafts = state.tabs.filter((tab) => isDraftPath(tab.path))
+  const drafts = state.tabs.filter(
+    (tab): tab is RequestTabState => isRequestTab(tab) && isDraftPath(tab.path)
+  )
 
   return (
     <aside className="sidebar">
@@ -512,8 +541,12 @@ export function Sidebar(): JSX.Element {
       case 'Enter':
         if (!current) return
         handled()
-        if (current.node.kind === 'folder') actions.toggleFolder(current.node.path)
-        else void actions.openTab(current.node.path)
+        // Mirrors clicking the row: open it. Left and Right collapse.
+        if (current.node.kind === 'folder') {
+          void actions.openFolderSettings(current.node.path, current.node.name)
+        } else {
+          void actions.openTab(current.node.path)
+        }
         return
       case 'F2':
         if (!current) return
@@ -545,6 +578,8 @@ export function Sidebar(): JSX.Element {
       { id: 'new-folder', label: 'New Folder', accelerator: 'CmdOrCtrl+Shift+N' },
       { id: 'import-curl', label: 'Import from cURL...', accelerator: 'CmdOrCtrl+I' },
       SEPARATOR,
+      { id: 'settings', label: 'Collection Settings...' },
+      SEPARATOR,
       { id: 'paste', label: 'Paste', accelerator: 'CmdOrCtrl+V' },
       SEPARATOR,
       { id: 'refresh', label: 'Reload from Disk', accelerator: 'CmdOrCtrl+R' },
@@ -559,6 +594,9 @@ export function Sidebar(): JSX.Element {
         break
       case 'import-curl':
         actions.openImportCurl(state.root)
+        break
+      case 'settings':
+        void actions.openFolderSettings('', 'Collection')
         break
       case 'paste':
         void actions.paste(state.root)

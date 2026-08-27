@@ -1,6 +1,17 @@
 /** On-disk + IPC types shared between main, preload and renderer. */
 
-export const FILE_FORMAT = 1
+/**
+ * The on-disk format version. Every file Frap writes carries `frap: <n>`.
+ *
+ * Older files are migrated in memory when they are read, never rewritten on
+ * sight: a `git pull` that brings in fifty v1 requests must not turn into a
+ * fifty-file diff. A file is only restamped when the user saves it.
+ *
+ * 1 - the original format.
+ * 2 - folders carry headers, auth and scripts; a request's auth defaults to
+ *     inheriting them rather than to none.
+ */
+export const FORMAT_VERSION = 2
 
 /**
  * Tab identifiers for things that are not a file on disk.
@@ -11,8 +22,13 @@ export const FILE_FORMAT = 1
  */
 export const DRAFT_PREFIX = 'draft:'
 export const WELCOME_TAB = 'welcome:'
+/** A folder's settings, opened as a tab. Suffixed with the folder's path. */
+export const FOLDER_TAB_PREFIX = 'folder:'
 
 export const isDraftPath = (target: string): boolean => target.startsWith(DRAFT_PREFIX)
+export const isFolderTabPath = (target: string): boolean => target.startsWith(FOLDER_TAB_PREFIX)
+/** The folder a `folder:` tab points at. */
+export const folderTabPath = (target: string): string => target.slice(FOLDER_TAB_PREFIX.length)
 export const REQUEST_EXT = '.frap.json'
 export const FOLDER_META = '_folder.frap.json'
 export const WORKSPACE_FILE = 'frap.workspace.json'
@@ -66,6 +82,36 @@ export interface Scripts {
   postResponse: string
 }
 
+/**
+ * Which settings a folder or request still takes from the folders above it.
+ *
+ * Turning one off makes that node a barrier for that property: everything an
+ * ancestor contributed is discarded, and resolution starts fresh here. The
+ * node's own setting still applies - a folder that blocks inherited headers
+ * and defines its own sends only its own.
+ */
+export interface InheritFlags {
+  headers: boolean
+  auth: boolean
+  preRequest: boolean
+  postResponse: boolean
+}
+
+export const INHERIT_ALL: InheritFlags = {
+  headers: true,
+  auth: true,
+  preRequest: true,
+  postResponse: true
+}
+
+/** The four things a folder passes down, in the order the UI shows them. */
+export const INHERITABLE: Array<{ key: keyof InheritFlags; label: string }> = [
+  { key: 'headers', label: 'headers' },
+  { key: 'auth', label: 'auth' },
+  { key: 'preRequest', label: 'pre-request scripts' },
+  { key: 'postResponse', label: 'tests' }
+]
+
 export interface RequestSettings {
   timeoutMs?: number
   followRedirects?: boolean
@@ -86,18 +132,44 @@ export interface FrapRequest {
   auth: Auth
   body: RequestBody
   scripts: Scripts
+  /** What this request still takes from its folders. */
+  inherit: InheritFlags
   docs?: string
   settings?: RequestSettings
 }
 
-/** The contents of a `_folder.frap.json` file. Entirely optional. */
+/**
+ * The contents of a `_folder.frap.json` file. Entirely optional.
+ *
+ * Everything here applies to every request below the folder. The workspace
+ * root can have one too, which is how collection-wide settings are expressed
+ * - it is just the outermost folder.
+ */
 export interface FolderMeta {
   frap: number
   id?: string
   order: number
   docs?: string
-  auth?: Auth
-  scripts?: Partial<Scripts>
+  /** Added to every request below, unless the request sets the same name. */
+  headers: KeyValue[]
+  /** Used by requests whose auth is `inherit`. The nearest folder wins. */
+  auth: Auth
+  /** Run around every request below: outermost first, the request last. */
+  scripts: Scripts
+  /** What this folder still takes from the folders above it. */
+  inherit: InheritFlags
+}
+
+/**
+ * A folder on the path from the workspace root to a request, with the
+ * settings it contributes. Ordered outermost first.
+ */
+export interface FolderScope {
+  /** Relative to the workspace root; empty for the root itself. */
+  relPath: string
+  /** Display name; "Collection" for the root. */
+  name: string
+  meta: FolderMeta
 }
 
 /** Where a `{{variable}}`'s value came from, for the hover card. */
@@ -145,6 +217,8 @@ export interface TreeNode {
   order: number
   /** Requests only - shown as a badge in the sidebar. */
   method?: string
+  /** Folders only - true when the folder contributes headers, auth or scripts. */
+  hasSettings?: boolean
   id?: string
   children?: TreeNode[]
 }
