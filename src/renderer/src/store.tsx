@@ -38,7 +38,12 @@ import {
   type VariableScope,
   type WorkspaceConfig
 } from '@shared/types'
-import { api, type LayoutState } from './api'
+import {
+  api,
+  type LayoutState,
+  type OpenApiOptions,
+  type OpenApiSource
+} from './api'
 
 /** Display label for a path: the file name without Frap's extension. */
 const labelOf = (target: string): string => {
@@ -157,6 +162,8 @@ export interface State {
   welcomeOpen: boolean
   /** Folder the import dialog will drop the new request into; null = closed. */
   importCurlInto: string | null
+  /** Folder the OpenAPI import will write into; null = closed. */
+  importOpenApiInto: string | null
   sidebarView: SidebarView
   history: HistoryEntry[]
   /** Resolved {{variables}}, for chips and hover cards. */
@@ -192,6 +199,7 @@ const initialState: State = {
   showSettings: false,
   welcomeOpen: false,
   importCurlInto: null,
+  importOpenApiInto: null,
   sidebarView: 'tree',
   history: [],
   variables: {},
@@ -228,6 +236,7 @@ type Action =
   | { type: 'toggle'; key: 'showEnvs' | 'showHelp' | 'showSettings'; value?: boolean }
   | { type: 'welcome'; open: boolean }
   | { type: 'importCurlInto'; dir: string | null }
+  | { type: 'importOpenApiInto'; dir: string | null }
   | { type: 'sidebarView'; view: SidebarView }
   | { type: 'history'; history: HistoryEntry[] }
   | { type: 'variables'; variables: VariableScope }
@@ -331,6 +340,8 @@ function reducer(state: State, action: Action): State {
     }
     case 'importCurlInto':
       return { ...state, importCurlInto: action.dir }
+    case 'importOpenApiInto':
+      return { ...state, importOpenApiInto: action.dir }
     case 'sidebarView':
       return { ...state, sidebarView: action.view }
     case 'history':
@@ -373,7 +384,8 @@ function landingResponseTab(result: ExecResult): ResponseTab {
 
 export interface Actions {
   pickAndOpen(): Promise<void>
-  open(root: string): Promise<void>
+  /** Opens a workspace, returning the root it settled on, or null. */
+  open(root: string): Promise<string | null | undefined>
   refresh(): Promise<void>
   openTab(path: string): Promise<void>
   closeTab(path: string, force?: boolean): Promise<void>
@@ -411,6 +423,9 @@ export interface Actions {
   /** Opens the import dialog, targeting `dir`; pass null to close it. */
   openImportCurl(dir: string | null): void
   importCurl(dir: string, text: string, substitute: boolean, name?: string): Promise<void>
+  /** Opens the OpenAPI import dialog, targeting `dir`; pass null to close it. */
+  openImportOpenApi(dir: string | null): void
+  importOpenApi(dir: string, source: OpenApiSource, options: OpenApiOptions): Promise<void>
 
   setSidebarView(view: SidebarView): void
   refreshHistory(): Promise<void>
@@ -519,7 +534,7 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
       const opened = await guard(() => api.openWorkspace(root))
       if (!opened) {
         dispatch({ type: 'loading', value: false })
-        return
+        return null
       }
       const activeEnv =
         opened.state.activeEnvironment &&
@@ -559,6 +574,7 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
         }
       }
       if (opened.state.activeTab) dispatch({ type: 'activeTab', path: opened.state.activeTab })
+      return opened.root
     },
     // openTabInternal, loadHistory and loadVariables are declared below but
     // only called after render, so their bindings are initialised by then.
@@ -668,6 +684,42 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
       toast('success', 'Imported from cURL')
     },
     [guard, openTabInternal, persistTabs, refresh, setCollapsed, toast]
+  )
+
+  /**
+   * Turns an OpenAPI document into real files.
+   *
+   * The whole import is one main-process call, so a spec with a hundred
+   * operations is one round trip and either lands or does not. With no
+   * workspace open there is nowhere to write, so we ask for a folder first
+   * rather than dropping a hundred drafts on the user.
+   */
+  const importOpenApiInternal = useCallback(
+    async (dir: string, source: OpenApiSource, options: OpenApiOptions) => {
+      let target = dir
+      if (!ref.current.root) {
+        const picked = await guard(() => api.pickWorkspace())
+        if (!picked) return
+        // open() reports the root it settled on; the state ref has not been
+        // through a render yet, so it is still null at this point.
+        const opened = await open(picked)
+        if (!opened) return
+        target = opened
+      }
+
+      const result = await guard(() => api.importOpenApi(source, target, options))
+      if (!result) return
+      dispatch({ type: 'importOpenApiInto', dir: null })
+      setCollapsed(target, false)
+      await refresh()
+      await loadVariables()
+      for (const warning of result.warnings) toast('info', warning)
+      toast(
+        'success',
+        `Imported ${result.created.length} request${result.created.length === 1 ? '' : 's'} from ${result.title}`
+      )
+    },
+    [guard, loadVariables, open, refresh, setCollapsed, toast]
   )
 
   /**
@@ -1020,6 +1072,12 @@ Close without saving?`
         dispatch({ type: 'importCurlInto', dir })
       },
 
+      openImportOpenApi(dir) {
+        dispatch({ type: 'importOpenApiInto', dir })
+      },
+
+      importOpenApi: importOpenApiInternal,
+
       importCurl: importCurlInternal,
 
       setSidebarView(view) {
@@ -1145,6 +1203,7 @@ Close without saving?`
       dirtyFolders,
       guard,
       importCurlInternal,
+      importOpenApiInternal,
       loadHistory,
       loadStores,
       loadVariables,

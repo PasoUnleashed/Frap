@@ -43,7 +43,7 @@ my-api/
     Log in.frap.json           one request = one file
     Whoami.frap.json
   Users/
-    _folder.frap.json          optional: just sort order for the folder
+    _folder.frap.json          optional: settings shared by the folder
     Get user.frap.json
 ```
 
@@ -57,6 +57,41 @@ working tree stays clean.
 
 The file name is the source of truth for the request name — rename the file in
 your editor or in git and Frap follows.
+
+Every file records the format version it was written in. Reading an older one
+migrates it in memory, so a `git pull` full of files from an earlier Frap is
+not a wall of diffs — the newer format is written only when you actually save
+that file. A file from a *newer* Frap than yours is refused with a message
+saying so rather than being quietly misread.
+
+## Settings a whole folder shares
+
+Headers, authentication and both script phases can live on a folder instead of
+on every request inside it. `_folder.frap.json` holds them, and the collection
+root carries them too, which is how you make something collection-wide.
+
+They are applied outermost first, so **the nearest one wins**:
+
+```
+/                Authorization: Bearer {{TOKEN}}   ← collection root
+  Users/         X-Tenant: acme                    ← folder
+    Get user     X-Tenant: other                   ← request, wins
+```
+
+That request sends both headers, with `X-Tenant: other`. Scripts run in the
+same order — root, then each folder on the way down, then the request — for
+pre-request and post-response alike, so one folder can sign every request below
+it, or assert something about every response.
+
+Click a folder to open its settings as a tab, like any request; the caret and
+the arrow keys collapse it. Unsaved edits still apply to the next send, so you
+can try a header out before committing to it.
+
+**Turning inheritance off.** Each inheritable property — headers, auth,
+pre-request script, post-response script — has its own toggle, on folders and
+on requests. Switching one off makes that node ignore everything its ancestors
+contributed for that property while keeping its own. A public health-check
+endpoint inside an authenticated collection is one click, not a restructure.
 
 ## Environments are `.env` files
 
@@ -93,6 +128,29 @@ byte for byte — Frap never re-serialises a line it did not change.
 
 `.env` files may also reference each other with `${OTHER}` and
 `${MISSING:-fallback}`.
+
+## Three places a value can live
+
+`{{NAME}}` is looked up in three stores, nearest first:
+
+| | Lives | Good for |
+|---|---|---|
+| **Session** | until you quit Frap; nothing on disk | a token fetched at the start of a run, an id passed from one request to the next |
+| **User** | on your machine, per collection, in Frap's app data | your personal token or account id — exactly what you would not want committed |
+| **Environment** | the active `.env` file | whatever the team shares |
+
+A session value hides a user value of the same name, and a user value hides one
+from the file; remove it and the next one down takes over again. Scripts write
+to whichever they mean:
+
+```js
+frap.session.set('requestId', crypto.randomUUID())    // this run only
+frap.user.set('MY_TOKEN', data.token)                 // kept, never committed
+frap.env.set('BASE_URL', 'https://staging.example')   // shared, in the file
+```
+
+All three are listed and editable under **Environments**, and `frap.env.get()`
+reads whatever `{{NAME}}` would resolve to across all three.
 
 ## Scripts
 
@@ -141,8 +199,10 @@ a script that throws half-way never leaves the file partly updated.
 |---|---|
 | `frap.request` | `.method` `.url` `.headers` `.body`, plus `setHeader` / `getHeader` / `removeHeader` / `json()` / `setJson()` |
 | `frap.response` | `.status` `.headers` `.body` `.time` `.size`, plus `json()` / `header(name)` |
-| `frap.env` | `get` `set` `unset` `has` `all` — `set`/`unset` write to the active `.env` |
-| `frap.vars` | same shape, but session-only; usable as `{{name}}`, never written to disk |
+| `frap.session` | `get` `set` `unset` `has` `all` — values that last until you quit Frap |
+| `frap.user` | same shape — values kept for you on this machine, never in the collection |
+| `frap.env` | same shape; `get` reads across all three stores, `set`/`unset` write the active `.env` |
+| `frap.vars` | the older name for `frap.session`, still supported |
 | `frap.test(name, fn)` | records a test; `fn` may be async |
 | `frap.expect(value)` | `toBe` `toEqual` `toBeTruthy` `toBeFalsy` `toBeDefined` `toBeUndefined` `toBeNull` `toContain` `toMatch` `toHaveProperty` `toHaveLength` `toBeGreaterThan(OrEqual)` `toBeLessThan(OrEqual)` `toBeOneOf` `toBeTypeOf`, each with `.not` |
 | `frap.console` | `log` `info` `warn` `error` → the Console tab |
@@ -213,6 +273,35 @@ an environment variable comes back as `{{THAT_VARIABLE}}`, so a request copied
 out of devtools is immediately portable. Untick the box in the dialog to keep
 the literal values.
 
+## Import an OpenAPI document
+
+From the File menu, from the tree's right-click menu to import into the
+collection root, or from a folder's right-click menu to import into that
+folder. Paste the JSON, or give Frap a URL and it fetches the document through
+the same engine your requests use, so redirects, gzip and your TLS setting all
+behave the way they do everywhere else.
+
+OpenAPI 3.0, 3.1 and Swagger 2.0 all import, and every operation becomes its
+own `.frap.json`:
+
+- each tag becomes a folder, or turn that off for one flat list
+- `/users/{id}` becomes `/users/{{id}}`, so path parameters are variables you
+  fill in like any other
+- required query and header parameters arrive enabled and optional ones arrive
+  switched off, so the request works as imported
+- bodies are filled in from the schema — `$ref`s resolved, `allOf` merged,
+  a declared example preferred over a generated one, and self-referencing
+  schemas terminated instead of looped
+- the document's security scheme becomes the target folder's auth, so
+  everything below inherits it rather than repeating it; an operation with
+  `security: []` opts itself out
+- the server URL is bound to `{{BASE_URL}}` — rename it if you like — written
+  to the active `.env`, or to your user store if there is no environment yet
+
+The preview lists the exact folders and requests it is going to write, plus
+anything it had to skip. It comes from the same parser that does the import, so
+what you see is what lands on disk.
+
 ## What Frap remembers for you
 
 Per machine, in your app-data folder (or `frap-data` beside the portable exe):
@@ -225,6 +314,8 @@ Per machine, in your app-data folder (or `frap-data` beside the portable exe):
 - **Send history** per workspace — method, URL, status and timing for
   everything you have sent, grouped by day in the sidebar's History tab
   (`Ctrl+H`). Click an entry to jump back to the request it came from.
+- **Your user store** per workspace — the personal half of `{{NAME}}`, kept out
+  of the collection folder entirely so it cannot be committed by accident
 - Open tabs and the active tab, restored on the next launch
 - Which folders you collapsed in the tree
 - Sidebar width and the request/response split
@@ -237,6 +328,7 @@ None of it touches the workspace folder, so none of it can show up in a diff.
 | Committed (in the workspace folder) | Machine-local (in app data) |
 |---|---|
 | requests, folders, scripts, docs | which environment is selected |
+| `_folder.frap.json` — a folder's shared headers, auth and scripts | your user store, and the session store while it lasts |
 | `frap.workspace.json` — name, environment list, timeout, redirect and TLS settings | open tabs, collapsed folders, pane sizes |
 | your `.env` files, if you choose to | send history, recent workspaces, window state |
 
@@ -252,8 +344,15 @@ local and staging is not something your teammates see in a diff.
   exact bytes that were sent
 - Per-hop redirect handling, gzip/deflate/br/zstd decoding, per-workspace
   timeout and TLS-verification toggle
+- Folder-level headers, auth and scripts, inherited by everything below, with a
+  per-property toggle to stop inheriting
+- Session and user stores alongside `.env`, resolved nearest-first
 - `{{variable}}` chips with hover values and copy-on-right-click
 - Copy any request as cURL, or import one by pasting a cURL command
+- Import an OpenAPI 3.x or Swagger 2.0 document by paste or URL, into the
+  collection or into one folder
+- Files are format-versioned, so old collections keep opening and new ones say
+  so plainly
 - Native right-click menus throughout the tree and the tab strip
 - Drag and drop to reorder and reorganise; ordering is stored per file
 - Resizable sidebar and response pane, both remembered between sessions
@@ -367,6 +466,8 @@ src/
     workspace.ts      the collection store on disk
     http.ts           request engine (node:http/https, timings, redirects)
     curl.ts           cURL export and import
+    openapi.ts        OpenAPI 3.x / Swagger 2.0 -> planned requests
+    migrate.ts        reads older file formats, refuses newer ones
     prepare.ts        request + variables -> bytes on the wire
     interpolate.ts    {{VARIABLE}} substitution
     scripting.ts      the node:vm sandbox and assertion library

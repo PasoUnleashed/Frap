@@ -36,6 +36,7 @@ import {
   entryViews,
   envToObject,
   expandEnv,
+  applyEnvChanges,
   readEnvDoc,
   setEnvValue,
   unsetEnvValue,
@@ -43,6 +44,8 @@ import {
 } from './dotenv.ts'
 import { execute } from './execute.ts'
 import { parseCurl, toCurl } from './curl.ts'
+import { parseOpenApi, type ParseOptions } from './openapi.ts'
+import { sendHttp } from './http.ts'
 import { toMutable } from './prepare.ts'
 import { SelfWriteTracker } from './selfwrites.ts'
 import {
@@ -61,6 +64,7 @@ import {
   readRequest,
   renameNode,
   reorder,
+  sanitizeName,
   scanTree,
   writeConfig,
   writeFolderMeta,
@@ -561,6 +565,120 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     markSelfWrite(file)
     return { path: file, warnings }
   })
+
+  /* -- OpenAPI ------------------------------------------------------- */
+
+  /**
+   * Fetches a document over HTTP.
+   *
+   * Goes through Frap's own engine rather than global fetch, so a redirect,
+   * a gzipped response or a self-signed certificate behaves the same way it
+   * would for a request you sent yourself.
+   */
+  const fetchDocument = async (url: string): Promise<string> => {
+    const trimmed = url.trim()
+    if (!/^https?:\/\//i.test(trimmed)) {
+      throw new Error('The URL must start with http:// or https://')
+    }
+    const response = await sendHttp(
+      {
+        method: 'GET',
+        url: trimmed,
+        headers: [
+          ['Accept', 'application/json, text/plain, */*'],
+          ['User-Agent', userAgent()]
+        ],
+        body: null
+      },
+      {
+        timeoutMs: current?.config.settings.timeoutMs ?? DEFAULT_SETTINGS.timeoutMs,
+        followRedirects: true,
+        maxRedirects: DEFAULT_SETTINGS.maxRedirects,
+        validateTls: current?.config.settings.validateTls ?? DEFAULT_SETTINGS.validateTls
+      }
+    )
+    if (response.status >= 400) {
+      throw new Error(`${trimmed} returned ${response.status} ${response.statusText}`)
+    }
+    if (response.isBinary) throw new Error(`${trimmed} did not return text`)
+    return response.bodyText
+  }
+
+  /** Text either pasted in or downloaded, so both paths share the parser. */
+  const openApiText = (source: { text?: string; url?: string }): Promise<string> =>
+    source.url?.trim() ? fetchDocument(source.url) : Promise.resolve(source.text ?? '')
+
+  /** Parses without writing anything, so the dialog can show what it will do. */
+  handle('openapi:parse', async (source: { text?: string; url?: string }, options: ParseOptions) =>
+    parseOpenApi(await openApiText(source), options)
+  )
+
+  handle(
+    'openapi:import',
+    async (
+      source: { text?: string; url?: string },
+      parentDir: string,
+      options: ParseOptions & { applyAuth?: boolean; server?: string }
+    ) => {
+      const { root } = requireWorkspace()
+      const target = parentDir || root
+      assertInside(root, target)
+
+      const plan = parseOpenApi(await openApiText(source), options)
+      const warnings = [...plan.warnings]
+      const created: string[] = []
+      // Folders are made once and reused, so a tag with twenty operations
+      // does not race twenty creations of the same directory.
+      const folders = new Map<string, string>()
+
+      for (const planned of plan.requests) {
+        let dir = target
+        if (planned.folder) {
+          const existing = folders.get(planned.folder)
+          if (existing) dir = existing
+          else {
+            const wanted = path.join(target, sanitizeName(planned.folder))
+            // Reuse a folder that is already there rather than making a
+            // second one with a numeric suffix.
+            dir = (await fs.stat(wanted).then((s) => s.isDirectory()).catch(() => false))
+              ? wanted
+              : await createFolder(root, target, planned.folder)
+            folders.set(planned.folder, dir)
+          }
+        }
+        const file = await writeNewRequest(root, dir, normalizeRequest(planned.request, 'Request'))
+        markSelfWrite(file)
+        created.push(file)
+      }
+
+      // The document's global security becomes the target folder's auth, so
+      // every request below inherits it instead of repeating it.
+      if (options.applyAuth !== false && plan.auth) {
+        const existing = (await readFolderMeta(target)) ?? normalizeFolderMeta({})
+        await writeFolderMeta(target, { ...existing, auth: plan.auth })
+        markSelfWrite(target, path.join(target, FOLDER_META))
+      }
+
+      // Bind the server URL, so the imported requests resolve straight away.
+      const server = options.server?.trim()
+      const variable = options.baseVariable?.trim() || 'BASE_URL'
+      let boundTo: string | null = null
+      if (server) {
+        const envPath = await activeEnvPath()
+        if (envPath) {
+          markSelfWrite(envPath)
+          await applyEnvChanges(envPath, [{ key: variable, value: server }])
+          boundTo = path.basename(envPath)
+        } else {
+          await setUserValues(storeRoot(), [{ key: variable, value: server }])
+          boundTo = 'user store'
+        }
+      }
+
+      markSelfWrite(target)
+      return { created, warnings, boundTo, variable, title: plan.title }
+    }
+  )
 
   /** Creates a request from a JSON object - what pasting a request does. */
   handle('request:createFrom', async (parentDir: string, input: Partial<FrapRequest>) => {

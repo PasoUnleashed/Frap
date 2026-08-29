@@ -4,6 +4,7 @@ import { api, type MenuItem } from './api'
 import { EnvironmentsDialog } from './components/EnvironmentsDialog'
 import { FolderPane } from './components/FolderPane'
 import { ImportCurlDialog } from './components/ImportCurlDialog'
+import { ImportOpenApiDialog } from './components/ImportOpenApiDialog'
 import { RequestPane } from './components/RequestPane'
 import { ResponsePane } from './components/ResponsePane'
 import { ScriptingHelp } from './components/ScriptingHelp'
@@ -570,6 +571,7 @@ function Workbench(): JSX.Element {
       ),
       window.frap.on('menu:newFolder', () => state.root && void actions.createFolder(state.root)),
       window.frap.on('menu:importCurl', () => actions.openImportCurl(state.root ?? '')),
+      window.frap.on('menu:importOpenApi', () => actions.openImportOpenApi(state.root ?? '')),
       window.frap.on('menu:copyCurl', withRequest((t) => void actions.copyCurl(t.path))),
       window.frap.on('menu:save', () => {
         const current = active()
@@ -753,6 +755,9 @@ export function App(): JSX.Element {
       {state.showHelp && <ScriptingHelp />}
       {state.showSettings && <SettingsDialog />}
       {state.importCurlInto !== null && <ImportCurlDialog targetDir={state.importCurlInto} />}
+      {state.importOpenApiInto !== null && (
+        <ImportOpenApiDialog targetDir={state.importOpenApiInto} />
+      )}
 
       <div className="toasts">
         {state.toasts.map((toast) => (

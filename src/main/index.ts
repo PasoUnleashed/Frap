@@ -109,6 +109,10 @@ function buildMenu(): void {
             accelerator: 'CmdOrCtrl+I',
             click: () => send('menu:importCurl')
           },
+          {
+            label: 'Import from OpenAPI...',
+            click: () => send('menu:importOpenApi')
+          },
           { type: 'separator' },
           { label: 'Save', accelerator: 'CmdOrCtrl+S', click: () => send('menu:save') },
           { type: 'separator' },

@@ -27,6 +27,7 @@ const EVENTS = [
   'menu:newRequest',
   'menu:newFolder',
   'menu:importCurl',
+  'menu:importOpenApi',
   'menu:copyCurl',
   'menu:save',
   'menu:closeTab',
@@ -83,6 +84,11 @@ const api = {
       call<{ request: unknown; warnings: string[] }>('curl:parse', text, substitute),
     import: (parentDir: string, text: string, substitute: boolean, name?: string) =>
       call<{ path: string; warnings: string[] }>('curl:import', parentDir, text, substitute, name)
+  },
+  openapi: {
+    parse: (source: unknown, options: unknown) => call<unknown>('openapi:parse', source, options),
+    import: (source: unknown, parentDir: string, options: unknown) =>
+      call<unknown>('openapi:import', source, parentDir, options)
   },
   history: {
     list: () => call<unknown[]>('history:list'),

@@ -123,6 +123,8 @@ function Row({ row, filter, dragOver, setDragOver }: RowProps): JSX.Element {
           { id: 'new-request', label: 'New Request' },
           { id: 'new-folder', label: 'New Folder' },
           { id: 'import-curl', label: 'Import from cURL...', accelerator: 'CmdOrCtrl+I' },
+      { id: 'import-openapi', label: 'Import from OpenAPI...' },
+          { id: 'import-openapi', label: 'Import OpenAPI Into This Folder...' },
           SEPARATOR,
           { id: 'settings', label: 'Folder Settings...' },
           SEPARATOR,
@@ -160,6 +162,10 @@ function Row({ row, filter, dragOver, setDragOver }: RowProps): JSX.Element {
         break
       case 'import-curl':
         actions.openImportCurl(parentDir)
+        break
+      case 'import-openapi':
+        // Into the folder itself when one was clicked, not beside it.
+        actions.openImportOpenApi(isFolder ? node.path : parentDir)
         break
       case 'settings':
         void actions.openFolderSettings(node.path, node.name)
@@ -594,6 +600,9 @@ export function Sidebar(): JSX.Element {
         break
       case 'import-curl':
         actions.openImportCurl(state.root)
+        break
+      case 'import-openapi':
+        actions.openImportOpenApi(state.root)
         break
       case 'settings':
         void actions.openFolderSettings('', 'Collection')

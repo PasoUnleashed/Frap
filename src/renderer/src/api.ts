@@ -3,6 +3,7 @@
  * so it stays dependency-free; the types are reattached here.
  */
 import type {
+  Auth,
   EnvFileView,
   ExecResult,
   FolderMeta,
@@ -22,6 +23,38 @@ export interface WorkspaceState {
   activeTab: string | null
   collapsedFolders: string[]
   history: HistoryEntry[]
+}
+
+/** A pasted document or one to download. */
+export interface OpenApiSource {
+  text?: string
+  url?: string
+}
+
+export interface OpenApiOptions {
+  baseVariable?: string
+  groupByTag?: boolean
+  applyAuth?: boolean
+  server?: string
+}
+
+/** What the parser found, for the preview. */
+export interface OpenApiPlanView {
+  title: string
+  version: string
+  servers: string[]
+  auth?: Auth
+  requests: Array<{ folder: string; request: { name?: string; method?: string; url?: string } }>
+  warnings: string[]
+}
+
+export interface OpenApiImportResult {
+  created: string[]
+  warnings: string[]
+  /** Where the base URL variable was written, if anywhere. */
+  boundTo: string | null
+  variable: string
+  title: string
 }
 
 export interface LayoutState {
@@ -86,6 +119,12 @@ export const api = {
     bridge.curl.parse(text, substitute) as Promise<{ request: FrapRequest; warnings: string[] }>,
   importCurl: (parentDir: string, text: string, substitute: boolean, name?: string) =>
     bridge.curl.import(parentDir, text, substitute, name),
+
+  /** Parses without writing, so the dialog can show what it would create. */
+  parseOpenApi: (source: OpenApiSource, options: OpenApiOptions) =>
+    bridge.openapi.parse(source, options) as Promise<OpenApiPlanView>,
+  importOpenApi: (source: OpenApiSource, parentDir: string, options: OpenApiOptions) =>
+    bridge.openapi.import(source, parentDir, options) as Promise<OpenApiImportResult>,
 
   listHistory: () => bridge.history.list() as Promise<HistoryEntry[]>,
   clearHistory: () => bridge.history.clear(),
