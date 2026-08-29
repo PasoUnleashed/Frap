@@ -79,10 +79,12 @@ export function describeVariable(name: string, scope: VariableScope): VariableDe
     value: info.value,
     origin:
       info.source === 'session'
-        ? 'set by a script this session'
-        : info.environment
-          ? `from the ${info.environment} environment`
-          : 'from the active environment'
+        ? 'from the session store'
+        : info.source === 'user'
+          ? 'from your user store'
+          : info.environment
+            ? `from the ${info.environment} environment`
+            : 'from the active environment'
   }
 }
 

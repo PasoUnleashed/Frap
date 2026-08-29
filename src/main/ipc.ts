@@ -22,6 +22,8 @@ import {
   type EnvFileView,
   type ExecResult,
   type FolderMeta,
+  type MapStore,
+  type StoreSnapshot,
   type FrapRequest,
   type HistoryEntry,
   type RecentWorkspace,
@@ -74,6 +76,8 @@ import {
   pushHistory,
   rememberWorkspace,
   setLayout,
+  setUserValues,
+  clearUserStore,
   setWorkspaceState,
   type LayoutState
 } from './state.ts'
@@ -136,12 +140,15 @@ async function activeEnvPath(): Promise<string | null> {
  * where each value came from, for the hover card in the editor.
  */
 async function activeScopeDetailed(): Promise<VariableScope> {
-  // An unsaved collection has no .env behind it, so only session values
-  // set by scripts can resolve.
+  // An unsaved collection has no .env behind it, but the session and user
+  // stores still work - they are not tied to a folder on disk.
   if (!current) {
-    return Object.fromEntries(
-      [...draftVars].map(([key, value]) => [key, { value, source: 'session' as const }])
-    )
+    const scope: VariableScope = {}
+    for (const [key, value] of await userStoreFor(DRAFT_STORE_KEY)) {
+      scope[key] = { value, source: 'user' }
+    }
+    for (const [key, value] of draftVars) scope[key] = { value, source: 'session' }
+    return scope
   }
   const { root } = requireWorkspace()
   const state = await getWorkspaceState(root)
@@ -158,7 +165,8 @@ async function activeScopeDetailed(): Promise<VariableScope> {
       }
     }
   }
-  // Session variables win, exactly as they do when a request is sent.
+  // Same precedence as a real send: environment, then user, then session.
+  for (const [key, value] of await userStoreFor(root)) scope[key] = { value, source: 'user' }
   for (const [key, value] of varsFor(root)) scope[key] = { value, source: 'session' }
   return scope
 }
@@ -274,6 +282,25 @@ function toOverrides(input?: Record<string, FolderMeta>): Map<string, FolderMeta
 const draftVars = new Map<string, string>()
 
 /**
+ * The key the user store lives under before a collection has a folder.
+ * Reserved rather than derived, so it can never collide with a real path.
+ */
+const DRAFT_STORE_KEY = '(unsaved collection)'
+
+/** The user store for a workspace, as a map the executor can read. */
+async function userStoreFor(root: string): Promise<Map<string, string>> {
+  return new Map(Object.entries((await getWorkspaceState(root)).userStore))
+}
+
+/** Persists what a script wrote to the user store, in one pass. */
+async function persistUserWrites(root: string, result: ExecResult): Promise<void> {
+  const changes = result.writes
+    .filter((w) => w.store === 'user')
+    .map((w) => ({ key: w.key, value: w.value }))
+  if (changes.length) await setUserValues(root, changes)
+}
+
+/**
  * Sends a request that has no file behind it.
  *
  * There is no workspace, so: no .env to read or write, the built-in
@@ -295,9 +322,11 @@ async function sendDraft(
       envPath: null,
       settings: DEFAULT_SETTINGS,
       vars: draftVars,
+      user: await userStoreFor(DRAFT_STORE_KEY),
       userAgent: userAgent(),
       signal: controller.signal
     })
+    await persistUserWrites(DRAFT_STORE_KEY, result)
     return { ...result, runId }
   } finally {
     inflight.delete(runId)
@@ -733,12 +762,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
           envPath,
           settings: config.settings,
           vars: varsFor(root),
+          user: await userStoreFor(root),
           userAgent: userAgent(),
           signal: controller.signal
         })
         // Re-mark: a long request can outlive the grace period, and a script's
         // env write lands at the very end of execute().
-        if (result.envWrites.length) markSelfWrite(envPath)
+        if (result.writes.some((w) => w.store === 'environment')) markSelfWrite(envPath)
+        await persistUserWrites(root, result)
         if (!result.skipped) {
           const entry: HistoryEntry = {
             id: runId,
@@ -790,6 +821,37 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   })
 
   handle('vars:scope', (): Promise<VariableScope> => activeScopeDetailed())
+
+  /* -- session and user stores --------------------------------------- */
+
+  /** The workspace these stores belong to; drafts get their own bucket. */
+  const storeRoot = (): string => current?.root ?? DRAFT_STORE_KEY
+
+  const storeSnapshot = async (root: string): Promise<StoreSnapshot> => ({
+    session: Object.fromEntries(varsFor(root)),
+    user: (await getWorkspaceState(root)).userStore
+  })
+
+  handle('store:list', () => storeSnapshot(storeRoot()))
+
+  handle('store:set', async (store: MapStore, key: string, value: string | null) => {
+    const root = storeRoot()
+    if (store === 'session') {
+      const map = varsFor(root)
+      if (value === null) map.delete(key)
+      else map.set(key, value)
+    } else {
+      await setUserValues(root, [{ key, value }])
+    }
+    return storeSnapshot(root)
+  })
+
+  handle('store:clear', async (store: MapStore) => {
+    const root = storeRoot()
+    if (store === 'session') varsFor(root).clear()
+    else await clearUserStore(root)
+    return storeSnapshot(root)
+  })
 
   handle('vars:list', () => {
     const { root } = requireWorkspace()

@@ -172,8 +172,34 @@ export interface FolderScope {
   meta: FolderMeta
 }
 
+/**
+ * Where a value lives, and what that means for its lifetime.
+ *
+ * They resolve innermost-first: session beats user, user beats environment.
+ * That mirrors how folders work - the nearer, more specific thing wins.
+ */
+export type StoreKind = 'session' | 'user' | 'environment'
+
+/** Highest priority first, which is the order a lookup walks them. */
+export const STORE_PRECEDENCE: StoreKind[] = ['session', 'user', 'environment']
+
+export const STORE_LABEL: Record<StoreKind, string> = {
+  session: 'Session',
+  user: 'User',
+  environment: 'Environment'
+}
+
+/** The two stores you can edit directly; the environment is a file. */
+export type MapStore = 'session' | 'user'
+
+/** Both editable stores, as the panel shows them. */
+export interface StoreSnapshot {
+  session: Record<string, string>
+  user: Record<string, string>
+}
+
 /** Where a `{{variable}}`'s value came from, for the hover card. */
-export type VariableSource = 'environment' | 'session'
+export type VariableSource = StoreKind
 
 export interface VariableInfo {
   value: string
@@ -302,9 +328,13 @@ export interface FrapResponse {
   timings: Timings
 }
 
-export interface EnvWrite {
-  file: string
+/** One value a script wrote, for the "what changed" panel after a send. */
+export interface VariableWrite {
+  store: StoreKind
+  /** The .env file for an environment write; the store's name otherwise. */
+  target: string
   key: string
+  /** null when the key was removed. */
   value: string | null
 }
 
@@ -317,7 +347,7 @@ export interface ExecResult {
   scriptError?: 'pre' | 'post'
   tests: TestResult[]
   logs: LogEntry[]
-  envWrites: EnvWrite[]
+  writes: VariableWrite[]
   skipped?: boolean
 }
 

@@ -33,6 +33,8 @@ import {
   type HistoryEntry,
   type RecentWorkspace,
   type TreeNode,
+  type MapStore,
+  type StoreSnapshot,
   type VariableScope,
   type WorkspaceConfig
 } from '@shared/types'
@@ -159,6 +161,8 @@ export interface State {
   history: HistoryEntry[]
   /** Resolved {{variables}}, for chips and hover cards. */
   variables: VariableScope
+  /** The session and user stores, as the environments panel shows them. */
+  stores: StoreSnapshot
   layout: LayoutState
   /** Folders the user collapsed, keyed by absolute path. */
   collapsed: Record<string, boolean>
@@ -191,6 +195,7 @@ const initialState: State = {
   sidebarView: 'tree',
   history: [],
   variables: {},
+  stores: { session: {}, user: {} },
   layout: { sidebarWidth: 280, responseHeight: 45 },
   collapsed: {},
   selected: null,
@@ -226,6 +231,7 @@ type Action =
   | { type: 'sidebarView'; view: SidebarView }
   | { type: 'history'; history: HistoryEntry[] }
   | { type: 'variables'; variables: VariableScope }
+  | { type: 'stores'; stores: StoreSnapshot }
   | { type: 'layout'; layout: LayoutState }
   | { type: 'collapsed'; collapsed: Record<string, boolean> }
   | { type: 'selected'; path: string | null }
@@ -331,6 +337,8 @@ function reducer(state: State, action: Action): State {
       return { ...state, history: action.history }
     case 'variables':
       return { ...state, variables: action.variables }
+    case 'stores':
+      return { ...state, stores: action.stores }
     case 'layout':
       return { ...state, layout: action.layout }
     case 'collapsed':
@@ -407,6 +415,9 @@ export interface Actions {
   setSidebarView(view: SidebarView): void
   refreshHistory(): Promise<void>
   refreshVariables(): Promise<void>
+  /** Sets or, with a null value, removes one key in the session/user store. */
+  setStoreValue(store: MapStore, key: string, value: string | null): Promise<void>
+  clearStore(store: MapStore): Promise<void>
   clearHistory(): Promise<void>
 
   setLayout(patch: Partial<LayoutState>): void
@@ -536,6 +547,7 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
       })
       void loadHistory()
       void loadVariables()
+      void loadStores()
 
       // Reopen whatever was open last time, skipping anything that has gone.
       for (const path of opened.state.openTabs ?? []) {
@@ -559,6 +571,14 @@ export function StoreProvider({ children }: { children: ReactNode }): JSX.Elemen
       dispatch({ type: 'variables', variables: await api.variableScope() })
     } catch {
       // Chips simply render as unresolved if this fails.
+    }
+  }, [])
+
+  const loadStores = useCallback(async () => {
+    try {
+      dispatch({ type: 'stores', stores: await api.listStores() })
+    } catch {
+      // The panel simply shows them empty if this fails.
     }
   }, [])
 
@@ -836,10 +856,12 @@ Close without saving?`
           void loadHistory()
           void loadVariables()
           // A script may have rewritten the .env file, so pull it back in.
-          if (result.envWrites.length) {
+          if (result.writes.some((w) => w.store === 'environment')) {
             const environments = await api.listEnvs()
             dispatch({ type: 'environments', environments })
           }
+          // Session and user writes change what {{variables}} resolve to.
+          if (result.writes.length) void loadStores()
         } catch (err) {
           dispatch({
             type: 'patchTab',
@@ -850,7 +872,7 @@ Close without saving?`
                 requestId: tab.request.id,
                 tests: [],
                 logs: [],
-                envWrites: [],
+                writes: [],
                 error: (err as Error).message
               }
             }
@@ -1008,6 +1030,20 @@ Close without saving?`
       refreshHistory: loadHistory,
       refreshVariables: loadVariables,
 
+      async setStoreValue(store, key, value) {
+        const stores = await guard(() => api.setStoreValue(store, key, value))
+        if (!stores) return
+        dispatch({ type: 'stores', stores })
+        void loadVariables()
+      },
+
+      async clearStore(store) {
+        const stores = await guard(() => api.clearStore(store))
+        if (!stores) return
+        dispatch({ type: 'stores', stores })
+        void loadVariables()
+      },
+
       async clearHistory() {
         await guard(() => api.clearHistory())
         dispatch({ type: 'history', history: [] })
@@ -1110,6 +1146,7 @@ Close without saving?`
       guard,
       importCurlInternal,
       loadHistory,
+      loadStores,
       loadVariables,
       open,
       openFolderTab,
@@ -1134,6 +1171,7 @@ Close without saving?`
       // Frap starts with no folder chosen: you can create requests and send
       // them straight away, and pick where they live when you save. The
       // Welcome tab offers the recent collections for the other case.
+      void loadStores()
       dispatch({ type: 'welcome', open: true })
       dispatch({ type: 'loading', value: false })
     })()

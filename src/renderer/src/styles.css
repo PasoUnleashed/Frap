@@ -1671,3 +1671,12 @@ textarea.curl-input {
   border-color: var(--warn);
   color: var(--warn);
 }
+
+/* Separates the two in-memory stores from the .env files below them. */
+.env-list .env-divider {
+  padding: 10px 9px 4px;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-faint);
+}

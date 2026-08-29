@@ -6,6 +6,8 @@ import type {
   EnvFileView,
   ExecResult,
   FolderMeta,
+  MapStore,
+  StoreSnapshot,
   FrapRequest,
   HistoryEntry,
   RecentWorkspace,
@@ -129,6 +131,12 @@ export const api = {
     bridge.exec.send(absPath, req, folderOverrides) as Promise<ExecResult & { runId: string }>,
   cancel: (runId: string) => bridge.exec.cancel(runId),
   cancelAll: () => bridge.exec.cancelAll(),
+
+  /** The session and user stores, as editable maps. */
+  listStores: () => bridge.stores.list() as Promise<StoreSnapshot>,
+  setStoreValue: (store: MapStore, key: string, value: string | null) =>
+    bridge.stores.set(store, key, value) as Promise<StoreSnapshot>,
+  clearStore: (store: MapStore) => bridge.stores.clear(store) as Promise<StoreSnapshot>,
 
   /** Everything {{name}} could resolve to right now, with provenance. */
   variableScope: () => bridge.vars.scope() as Promise<VariableScope>,

@@ -135,6 +135,12 @@ const api = {
     cancel: (runId: string) => call<boolean>('exec:cancel', runId),
     cancelAll: () => call<boolean>('exec:cancelAll')
   },
+  stores: {
+    list: () => call<unknown>('store:list'),
+    set: (store: string, key: string, value: string | null) =>
+      call<unknown>('store:set', store, key, value),
+    clear: (store: string) => call<unknown>('store:clear', store)
+  },
   vars: {
     scope: () => call<unknown>('vars:scope'),
     list: () => call<Record<string, string>>('vars:list'),

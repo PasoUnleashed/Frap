@@ -100,10 +100,20 @@ test('resolved variables report their value and where it came from', () => {
   })
 })
 
-test('script-set variables are marked as session values', () => {
-  const described = describeVariable('TOKEN', SCOPE)
-  assert.equal(described.kind, 'resolved')
-  assert.equal(described.origin, 'set by a script this session')
+test('the hover card names which store a value came from', () => {
+  const session = describeVariable('TOKEN', SCOPE)
+  assert.equal(session.kind, 'resolved')
+  assert.equal(session.origin, 'from the session store')
+
+  const user = describeVariable('MINE', {
+    MINE: { value: 'x', source: 'user' }
+  })
+  assert.equal(user.origin, 'from your user store')
+
+  const env = describeVariable('SHARED', {
+    SHARED: { value: 'x', source: 'environment', environment: 'staging' }
+  })
+  assert.equal(env.origin, 'from the staging environment')
 })
 
 test('an empty value is resolved, not missing', () => {

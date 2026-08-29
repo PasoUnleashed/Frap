@@ -11,12 +11,13 @@ const ROWS: Array<[string, string]> = [
   ['frap.request.body', 'The request body as a string, or null.'],
   ['frap.request.json()', 'Parses the body as JSON.'],
   ['frap.request.setJson(value)', 'Replaces the body with JSON and sets the content type.'],
-  ['frap.env.get(key)', 'Reads a value from the active .env file.'],
+  ['frap.session.get/set/unset/has/all', 'The session store: values that last until you quit Frap.'],
+  ['frap.user.get/set/unset/has/all', 'The user store: values kept for you on this machine.'],
+  ['frap.env.get(key)', 'Reads whatever {{key}} would resolve to, across all three stores.'],
   ['frap.env.set(key, value)', 'Writes to the active .env file, keeping every comment.'],
   ['frap.env.unset(key)', 'Removes a key from the active .env file.'],
   ['frap.env.all()', 'Every resolved variable as an object.'],
-  ['frap.vars.set(key, value)', 'Session-only value. Usable as {{key}}, never written to disk.'],
-  ['frap.vars.get(key)', 'Reads a session value.'],
+  ['frap.vars', 'The older name for frap.session. Still works.'],
   ['frap.console.log(...)', 'Writes to the Console tab. log / info / warn / error.'],
   ['frap.skipRequest()', 'Pre-request only: stop without sending.'],
   ['frap.response.status', 'Status code.'],
@@ -103,11 +104,52 @@ frap.request.setHeader('Authorization', 'Bearer ' + frap.env.get('TOKEN'))`}</pr
               are all preserved, which keeps the git diff to exactly what changed.
             </p>
 
+            <h3>Three places a value can live</h3>
+            <p>
+              <code>{'{{NAME}}'}</code> is looked up in three stores, nearest first:
+            </p>
+            <table>
+              <tbody>
+                <tr>
+                  <td>frap.session</td>
+                  <td className="dim">
+                    Lives until you quit. Nothing on disk. Good for a token you fetch at the start
+                    of a run, or an id you pass from one request to the next.
+                  </td>
+                </tr>
+                <tr>
+                  <td>frap.user</td>
+                  <td className="dim">
+                    Kept for you on this machine, per collection, in Frap&apos;s own app data -
+                    never in the collection folder. Good for your personal token or account id,
+                    which is exactly what you would not want committed.
+                  </td>
+                </tr>
+                <tr>
+                  <td>frap.env</td>
+                  <td className="dim">
+                    The active <code>.env</code> file. Shared with whoever has the repo, if you
+                    commit it.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <p>
+              A session value hides a user value of the same name, and a user value hides one from
+              the file. Remove it and the next one down takes over again. All three are visible and
+              editable under <b>Environments</b>.
+            </p>
+            <pre>{`// A token nobody else should have, kept between runs:
+frap.user.set('MY_TOKEN', data.token)
+
+// Something only this run cares about:
+frap.session.set('requestId', crypto.randomUUID())`}</pre>
+
             <h3>Variables</h3>
             <p>
               <code>{'{{NAME}}'}</code> works in the URL, params, headers, auth fields and the body.
               Values come from the active .env file, then anything{' '}
-              <code>frap.vars.set()</code> has set this session. A few are generated per request:
+              <code>frap.session.set()</code> has set this run. A few are generated per request:
             </p>
             <pre>{`{{$uuid}}  {{$timestamp}}  {{$isoTimestamp}}  {{$randomInt}}  {{$randomHex}}`}</pre>
             <p>

@@ -7,9 +7,11 @@ import {
   type JSX,
   type KeyboardEvent
 } from 'react'
+import { STORE_LABEL, type MapStore } from '@shared/types'
 import { api } from '../api'
 import { useStore } from '../store'
 import { CodeEditor } from './CodeEditor'
+import { StorePanel } from './StorePanel'
 
 /** A row you have started typing but not finished; not yet in the file. */
 interface Draft {
@@ -35,6 +37,12 @@ const suggestedFile = (name: string): string => {
 export function EnvironmentsDialog(): JSX.Element {
   const { state, actions } = useStore()
   const [selected, setSelected] = useState<string | null>(state.activeEnv)
+  /**
+   * The session or user store, when one of those is picked instead of a file.
+   * They sit in the same list because they answer the same question - where
+   * does {{this}} come from - even though only the files live in the folder.
+   */
+  const [storeView, setStoreView] = useState<MapStore | null>(null)
   const [mode, setMode] = useState<'table' | 'raw'>('table')
   const [draft, setDraft] = useState<string | null>(null)
   const [drafts, setDrafts] = useState<Draft[]>([])
@@ -210,11 +218,30 @@ export function EnvironmentsDialog(): JSX.Element {
 
         <div className="env-layout">
           <div className="env-list">
+            {(['session', 'user'] as MapStore[]).map((store) => (
+              <div
+                key={store}
+                className={`item${storeView === store ? ' active' : ''}`}
+                onClick={() => setStoreView(store)}
+              >
+                <span>
+                  {STORE_LABEL[store]}
+                  <span className="badge"> {Object.keys(state.stores[store]).length}</span>
+                </span>
+                <span className="file">
+                  {store === 'session' ? 'this run only' : 'saved for you'}
+                </span>
+              </div>
+            ))}
+            <div className="env-divider">Environment files</div>
             {state.environments.map((item) => (
               <div
                 key={item.name}
-                className={`item${item.name === env?.name ? ' active' : ''}`}
-                onClick={() => setSelected(item.name)}
+                className={`item${!storeView && item.name === env?.name ? ' active' : ''}`}
+                onClick={() => {
+                  setStoreView(null)
+                  setSelected(item.name)
+                }}
               >
                 <span>
                   {item.name}
@@ -284,6 +311,9 @@ export function EnvironmentsDialog(): JSX.Element {
             )}
           </div>
 
+          {storeView ? (
+            <StorePanel store={storeView} />
+          ) : (
           <div className="env-detail">
             {!env ? (
               <div className="empty-hint">Nothing selected.</div>
@@ -463,6 +493,7 @@ export function EnvironmentsDialog(): JSX.Element {
               </>
             )}
           </div>
+          )}
         </div>
 
         <footer>

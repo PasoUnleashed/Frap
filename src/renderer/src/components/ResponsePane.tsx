@@ -155,10 +155,10 @@ export function ResponsePane({ tab }: Props): JSX.Element {
       <div className="pane-body">
         {result.error && <div className="error-box">{result.error}</div>}
 
-        {result.envWrites.length > 0 && (
+        {result.writes.length > 0 && (
           <div className="env-writes">
-            <div className="title">Environment updated</div>
-            {result.envWrites.map((write, i) => (
+            <div className="title">Values updated</div>
+            {result.writes.map((write, i) => (
               <div key={i}>
                 <code>{write.key}</code>
                 {write.value === null ? (
@@ -166,7 +166,7 @@ export function ResponsePane({ tab }: Props): JSX.Element {
                 ) : (
                   <span className="dim"> written to </span>
                 )}
-                <code>{write.file}</code>
+                <code>{write.target}</code>
               </div>
             ))}
           </div>

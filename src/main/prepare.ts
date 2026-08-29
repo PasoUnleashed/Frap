@@ -267,6 +267,27 @@ export async function finalize(
   mutable: MutableRequest,
   ctx: PrepareContext
 ): Promise<PreparedRequest> {
+  // A second interpolation pass, now that the pre-request scripts have run.
+  //
+  // The first pass happens before them, so a script sees a resolved url and
+  // resolved headers rather than raw {{...}}. But a script that sets a value -
+  // fetching a token, say - would otherwise leave any {{TOKEN}} written in the
+  // request unresolved. Anything that already resolved is untouched; only text
+  // still carrying {{...}} gets another go.
+  const again = (text: string): string =>
+    text.includes('{{') ? interpolate(text, ctx.scope, ctx.missing) : text
+
+  // The misses are recomputed, so a name the script supplied stops being
+  // reported as unresolved.
+  ctx.missing.clear()
+  mutable.url = again(mutable.url)
+  for (const [key, value] of Object.entries(mutable.headers)) {
+    const resolvedKey = again(key)
+    if (resolvedKey !== key) delete mutable.headers[key]
+    mutable.headers[resolvedKey] = again(value)
+  }
+  if (mutable.body !== null) mutable.body = again(mutable.body)
+
   const headers = new Map<string, string>()
   for (const [key, value] of Object.entries(mutable.headers)) {
     if (key.trim()) headers.set(key, value)

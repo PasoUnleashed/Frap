@@ -17,8 +17,13 @@ export interface ExecuteInput {
   /** Absolute path to the active .env file, or null when none is selected. */
   envPath: string | null
   settings: WorkspaceConfig['settings']
-  /** Session variables, shared across requests so scripts can chain them. */
+  /** The session store, shared across requests so scripts can chain them. */
   vars: Map<string, string>
+  /**
+   * The user store as it stands. Writes come back in the result rather than
+   * being persisted here, so the caller owns the one place that touches disk.
+   */
+  user?: Map<string, string>
   /** User-Agent for requests that do not set their own. */
   userAgent?: string
   /**
@@ -71,12 +76,13 @@ function previewOf(body: Buffer | null): string {
 export async function execute(input: ExecuteInput): Promise<ExecResult> {
   const { root, request, envPath, settings, vars, userAgent, signal } = input
   const folders = input.folders ?? []
+  const user = input.user ?? new Map<string, string>()
 
   const result: ExecResult = {
     requestId: request.id,
     tests: [],
     logs: [],
-    envWrites: []
+    writes: []
   }
 
   // 1. Build the variable scope: .env file first, session variables on top.
@@ -90,6 +96,12 @@ export async function execute(input: ExecuteInput): Promise<ExecResult> {
       return result
     }
   }
+  // The environment layer on its own, so a script that removes a session or
+  // user value can fall back to it.
+  const envValues = { ...scope }
+  // Lowest priority first, so the innermost store ends up winning:
+  // environment file, then the user store, then this session's values.
+  for (const [key, value] of user) scope[key] = value
   for (const [key, value] of vars) scope[key] = value
 
   const prepareCtx: PrepareContext = { root, scope, missing: new Set(), userAgent, folders }
@@ -106,29 +118,49 @@ export async function execute(input: ExecuteInput): Promise<ExecResult> {
     phase: 'pre',
     scope,
     vars,
+    user,
+    envValues,
     request: mutable,
     envWrites: [],
+    userWrites: [],
     logs: result.logs,
     tests: result.tests
   }
 
-  const flushEnv = async (): Promise<void> => {
-    if (!scriptCtx.envWrites.length) return
-    result.envWrites = scriptCtx.envWrites.map((w) => ({
-      file: envPath ? path.basename(envPath) : '(none)',
-      key: w.key,
-      value: w.value
-    }))
-    if (!envPath) {
-      result.logs.push({
-        level: 'warn',
-        phase: scriptCtx.phase,
-        message: 'frap.env.set was called but no environment is selected, so nothing was saved.',
-        time: Date.now()
-      })
-      return
+  /**
+   * Persists what the scripts wrote, once, after they have finished.
+   *
+   * Buffering rather than writing as you go means a script that throws
+   * half-way cannot leave a file - or the user store - partly updated.
+   */
+  const flushWrites = async (): Promise<void> => {
+    result.writes = [
+      ...scriptCtx.userWrites.map((w) => ({
+        store: 'user' as const,
+        target: 'user store',
+        key: w.key,
+        value: w.value
+      })),
+      ...scriptCtx.envWrites.map((w) => ({
+        store: 'environment' as const,
+        target: envPath ? path.basename(envPath) : '(none)',
+        key: w.key,
+        value: w.value
+      }))
+    ]
+
+    if (scriptCtx.envWrites.length) {
+      if (!envPath) {
+        result.logs.push({
+          level: 'warn',
+          phase: scriptCtx.phase,
+          message: 'frap.env.set was called but no environment is selected, so nothing was saved.',
+          time: Date.now()
+        })
+      } else {
+        await applyEnvChanges(envPath, scriptCtx.envWrites)
+      }
     }
-    await applyEnvChanges(envPath, scriptCtx.envWrites)
   }
 
   /**
@@ -153,12 +185,12 @@ export async function execute(input: ExecuteInput): Promise<ExecResult> {
   // 2. Pre-request scripts: folders outermost first, then the request.
   const pre = await runPhase('pre')
   if (pre.skipped) {
-    await flushEnv()
+    await flushWrites()
     result.skipped = true
     return result
   }
   if (pre.error) {
-    await flushEnv()
+    await flushWrites()
     result.error = pre.source === 'request' ? pre.error : `${pre.source}: ${pre.error}`
     result.scriptError = 'pre'
     return result
@@ -169,7 +201,7 @@ export async function execute(input: ExecuteInput): Promise<ExecResult> {
   try {
     prepared = await finalize(request, mutable, prepareCtx)
   } catch (err) {
-    await flushEnv()
+    await flushWrites()
     result.error = (err as Error).message
     return result
   }
@@ -200,7 +232,7 @@ export async function execute(input: ExecuteInput): Promise<ExecResult> {
       signal
     })
   } catch (err) {
-    await flushEnv()
+    await flushWrites()
     result.error = (err as Error).message
     return result
   }
@@ -216,7 +248,7 @@ export async function execute(input: ExecuteInput): Promise<ExecResult> {
 
   // 5. Persist environment writes, whatever happened above.
   try {
-    await flushEnv()
+    await flushWrites()
   } catch (err) {
     result.error = result.error ?? `Could not write environment file: ${(err as Error).message}`
   }

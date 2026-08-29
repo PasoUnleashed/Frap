@@ -189,9 +189,9 @@ test('scripts write to the .env file and keep every comment', async () => {
 
   assert.equal(result.error, undefined)
   assert.equal(result.tests[0].passed, true)
-  assert.deepEqual(result.envWrites, [
-    { file: '.env', key: 'TOKEN', value: 'fresh-token-123' },
-    { file: '.env', key: 'TOKEN_EXPIRES', value: '3600' }
+  assert.deepEqual(result.writes, [
+    { store: 'environment', target: '.env', key: 'TOKEN', value: 'fresh-token-123' },
+    { store: 'environment', target: '.env', key: 'TOKEN_EXPIRES', value: '3600' }
   ])
 
   const after = await fs.readFile(path.join(dir, '.env'), 'utf8')

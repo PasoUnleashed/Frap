@@ -30,6 +30,15 @@ export interface WorkspaceState {
   /** Folders the user has collapsed in the sidebar. Absolute paths. */
   collapsedFolders: string[]
   history: HistoryEntry[]
+  /**
+   * The user store: values that outlive the app but belong to this machine.
+   *
+   * It lives here rather than in the collection folder precisely because it
+   * is personal - a token or an account id you would not commit. Scoped per
+   * workspace, like everything else in this file, so two collections cannot
+   * collide on a name as ordinary as TOKEN.
+   */
+  userStore: Record<string, string>
 }
 
 export interface AppState {
@@ -48,7 +57,8 @@ const EMPTY_WORKSPACE: WorkspaceState = {
   openTabs: [],
   activeTab: null,
   collapsedFolders: [],
-  history: []
+  history: [],
+  userStore: {}
 }
 
 const EMPTY: AppState = {
@@ -135,6 +145,30 @@ export async function pushHistory(root: string, entry: HistoryEntry): Promise<vo
   await setWorkspaceState(root, {
     history: [entry, ...current.history].slice(0, HISTORY_LIMIT)
   })
+}
+
+/**
+ * Applies a batch of user-store changes; a null value removes the key.
+ *
+ * Batched so a script that sets five values writes the state file once, the
+ * same way environment writes are flushed in one pass.
+ */
+export async function setUserValues(
+  root: string,
+  changes: Array<{ key: string; value: string | null }>
+): Promise<Record<string, string>> {
+  if (!changes.length) return (await getWorkspaceState(root)).userStore
+  const userStore = { ...(await getWorkspaceState(root)).userStore }
+  for (const { key, value } of changes) {
+    if (value === null) delete userStore[key]
+    else userStore[key] = value
+  }
+  await setWorkspaceState(root, { userStore })
+  return userStore
+}
+
+export async function clearUserStore(root: string): Promise<void> {
+  await setWorkspaceState(root, { userStore: {} })
 }
 
 export async function clearHistory(root: string): Promise<void> {

@@ -25,12 +25,24 @@ export interface ScriptContext {
   phase: 'pre' | 'post'
   /** Resolved variables; script writes update this in place. */
   scope: Record<string, string>
-  /** Session-scoped values that never touch disk. */
+  /** The session store: values that live only for this run of the app. */
   vars: Map<string, string>
+  /** The user store, as it stands; writes go to `userWrites`. */
+  user: Map<string, string>
+  /**
+   * The environment layer on its own, underneath the other two.
+   *
+   * `scope` is the flattened view the interpolator uses; keeping the bottom
+   * layer separately is what lets removing a session value fall back to the
+   * user store, and removing that fall back to the file.
+   */
+  envValues: Record<string, string>
   request: MutableRequest
   response?: FrapResponse
   /** Populated as the script calls `frap.env.set` / `frap.env.unset`. */
   envWrites: EnvWriteRecord[]
+  /** The same, for `frap.user`; flushed to app data after the script. */
+  userWrites: EnvWriteRecord[]
   logs: LogEntry[]
   tests: TestResult[]
   /** Set by `frap.skipRequest()` in a pre-request script. */
@@ -192,7 +204,17 @@ function buildFrapApi(ctx: ScriptContext, pending: Promise<void>[]): Record<stri
     ctx.logs.push({ level, phase: ctx.phase, message: formatLogArgs(args), time: Date.now() })
   }
 
+  /** Restores a key to whatever layer still holds it, highest priority first. */
+  const recomputeScopeEntry = (key: string): void => {
+    if (ctx.vars.has(key)) ctx.scope[key] = ctx.vars.get(key)!
+    else if (ctx.user.has(key)) ctx.scope[key] = ctx.user.get(key)!
+    else if (ctx.envValues[key] !== undefined) ctx.scope[key] = ctx.envValues[key]
+    else delete ctx.scope[key]
+  }
+
   const env = {
+    // `get` and `all` read the merged view on purpose: a script asking for a
+    // value wants whatever {{name}} would resolve to, not one layer of it.
     get: (key: string): string | undefined => ctx.scope[key],
     has: (key: string): boolean => ctx.scope[key] !== undefined,
     all: (): Record<string, string> => ({ ...ctx.scope }),
@@ -201,29 +223,48 @@ function buildFrapApi(ctx: ScriptContext, pending: Promise<void>[]): Record<stri
         throw new Error(`Not a valid environment variable name: ${JSON.stringify(key)}`)
       }
       const text = typeof value === 'string' ? value : String(value)
-      ctx.scope[key] = text
+      ctx.envValues[key] = text
+      recomputeScopeEntry(key)
       ctx.envWrites.push({ key, value: text })
     },
     unset: (key: string): void => {
-      delete ctx.scope[key]
+      delete ctx.envValues[key]
+      recomputeScopeEntry(key)
       ctx.envWrites.push({ key, value: null })
     }
   }
 
-  const vars = {
-    get: (key: string): string | undefined => ctx.vars.get(key),
-    has: (key: string): boolean => ctx.vars.has(key),
+/**
+   * The session and user stores share everything but where a write ends up,
+   * so they are built from one factory.
+   *
+   * Both update `scope` as they go, which is what makes a value set in a
+   * pre-request script resolvable as {{name}} in the same send.
+   */
+  const mapStore = (
+    map: Map<string, string>,
+    record?: EnvWriteRecord[]
+  ): Record<string, unknown> => ({
+    get: (key: string): string | undefined => map.get(key),
+    has: (key: string): boolean => map.has(key),
+    all: (): Record<string, string> => Object.fromEntries(map),
     set: (key: string, value: unknown): void => {
       const text = typeof value === 'string' ? value : String(value)
-      ctx.vars.set(key, text)
-      ctx.scope[key] = text
+      map.set(key, text)
+      // Recompute rather than assign: a write to the user store must not
+      // shadow a session value of the same name.
+      recomputeScopeEntry(key)
+      record?.push({ key, value: text })
     },
     unset: (key: string): void => {
-      ctx.vars.delete(key)
-      delete ctx.scope[key]
-    },
-    all: (): Record<string, string> => Object.fromEntries(ctx.vars)
-  }
+      map.delete(key)
+      recomputeScopeEntry(key)
+      record?.push({ key, value: null })
+    }
+  })
+
+  const session = mapStore(ctx.vars)
+  const user = mapStore(ctx.user, ctx.userWrites)
 
   const request = {
     get method(): string {
@@ -276,8 +317,12 @@ function buildFrapApi(ctx: ScriptContext, pending: Promise<void>[]): Record<stri
 
   const api: Record<string, unknown> = {
     env,
-    vars,
-    variables: vars,
+    session,
+    user,
+    // The original name for the session store, kept so existing scripts and
+    // the examples in the docs go on working.
+    vars: session,
+    variables: session,
     request,
     console: {
       log: log('log'),
